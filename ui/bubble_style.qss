@@ -1,0 +1,126 @@
+/* ui/bubble_style.qss */
+/* Styles for HTML content rendered within the ChatItemDelegate */
+
+body {
+    background-color: transparent; /* Base text background within bubble is transparent */
+    /* Font family, size, and color are primarily set by the delegate based on role */
+}
+
+/* Code Blocks (<pre><code>) */
+pre {
+    background-color: #282c34; /* Code block background (constants.CODE_BLOCK_BG_COLOR_HEX) */
+    border: 1px solid #4a505e; /* Darker border for code block */
+    border-radius: 4px;
+    padding: 10px;
+    margin: 8px 2px;
+    font-family: "JetBrains Mono", "Consolas", "Courier New", monospace; /* Consistent code font */
+    font-size: 9pt; /* Consistent code font size (constants.CODE_FONT_SIZE) */
+    color: #cccccc; /* Default code text color (constants.CODE_BLOCK_TEXT_COLOR_HEX) */
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-x: auto; /* Add scrollbar if content is too wide */
+}
+
+pre code { /* Styles for <code> inside <pre> */
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background-color: transparent;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+}
+
+/* Inline Code (<code> not in <pre>) */
+code {
+    font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
+    background-color: #3c3f41; /* Slightly lighter than pre background */
+    color: #ce9178; /* An orange-ish color often used for inline code/strings */
+    padding: 2px 5px;
+    margin: 0 2px;
+    border-radius: 3px;
+    font-size: 8.5pt; /* Slightly smaller than block code */
+    border: 1px solid #4a505e;
+}
+
+/* Markdown elements */
+strong, b {
+    font-weight: bold;
+    /* color: #569cd6; */ /* Example: VS Code blue for keywords, can be adapted */
+}
+
+em, i {
+    font-style: italic;
+    /* color: #9cdcfe; */ /* Example: VS Code light blue */
+}
+
+a {
+    color: #61afef; /* Standard link blue */
+    text-decoration: underline;
+}
+a:hover {
+    color: #82c0ff;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    margin-top: 0.8em;
+    margin-bottom: 0.4em;
+    font-weight: bold;
+}
+h1 { font-size: 1.6em; color: #61afef; border-bottom: 1px solid #454545; padding-bottom: 0.2em;}
+h2 { font-size: 1.4em; color: #98c379; border-bottom: 1px solid #454545; padding-bottom: 0.2em;}
+h3 { font-size: 1.2em; color: #e5c07b; }
+h4 { font-size: 1.0em; color: #e06c75; }
+h5 { font-size: 0.9em; color: #c678dd; }
+h6 { font-size: 0.85em; color: #abb2bf; font-style: italic; }
+
+p {
+    margin-top: 0.3em;
+    margin-bottom: 0.7em;
+    line-height: 1.5;
+}
+
+ul, ol {
+    margin-left: 5px; /* Reduced excessive left margin */
+    padding-left: 20px; /* Indent for bullets/numbers */
+    margin-top: 0.5em;
+    margin-bottom: 0.8em;
+}
+
+li {
+    margin-bottom: 0.3em;
+    line-height: 1.5;
+}
+
+blockquote {
+    border-left: 4px solid #5c6370; /* Accent border color */
+    margin: 10px 0px 10px 5px; /* Adjusted margins */
+    padding: 8px 12px;
+    color: #9aabbf; /* Muted text color for quotes */
+    background-color: #313335; /* Slightly different background */
+    border-radius: 4px;
+}
+
+hr {
+    border: 0;
+    height: 1px;
+    background-color: #555555;
+    margin: 15px 0;
+}
+
+table {
+    border-collapse: collapse;
+    margin: 1em 0;
+    border: 1px solid #555555;
+    background-color: #313335;
+}
+th, td {
+    border: 1px solid #555555;
+    padding: 6px 10px;
+    text-align: left;
+}
+th {
+    background-color: #3c3f41;
+    font-weight: bold;
+}

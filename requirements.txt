@@ -1,0 +1,45 @@
+# PyDevAI_Studio/requirements.txt
+
+# Core GUI Framework
+PyQt6
+PyQt6-sip
+# PyQt6-Qt6 # Often comes with PyQt6, but explicitly listing if needed
+
+# Async Integration for Qt
+qasync
+
+# LLM Client Libraries
+ollama
+google-generativeai
+openai
+
+# --- RAG Dependencies ---
+# Vector Database & Search
+numpy # Required by embedding/math operations
+faiss-cpu # Vector index library (CPU version)
+
+# Embedding Model Library
+sentence-transformers
+
+# Text Splitting for RAG
+langchain-text-splitters # For general text and Python code splitting
+
+# Document Reading Libraries (if RAG needs to support more than .py)
+PyPDF2
+python-docx
+
+# --- UI Enhancements & Utilities ---
+Markdown # For rendering rich text if needed (e.g., in chat bubbles)
+Pillow # For image handling if chat supports image inputs
+qtawesome # For icons
+
+# --- Configuration & Environment ---
+python-dotenv
+
+# --- Code Formatting/Linting (for the IDE to use on generated code) ---
+ruff # For fast linting and formatting
+
+# --- Development & Utility ---
+ast
+logging
+asyncio
