@@ -22,7 +22,7 @@ try:
 
     MC_LLM_COMM_LOGGER_AVAILABLE = True
 except ImportError:
-    LlmCommunicationLogger = None  # type: ignore
+    LlmCommunicationLogger = None
     MC_LLM_COMM_LOGGER_AVAILABLE = False
     logging.error("ModificationCoordinator: Failed to import LlmCommunicationLogger.")
 
@@ -95,7 +95,6 @@ class ModificationCoordinator(QObject):
         self._active_code_generation_tasks: Dict[str, asyncio.Task] = {}
 
         self._connect_handler_signals()
-        # logger.info("ModificationCoordinator initialized with RagHandler.") # Already logged by llm_comm_logger presence check
 
     def _connect_handler_signals(self):
         if self._handler:
@@ -156,57 +155,43 @@ class ModificationCoordinator(QObject):
 
     def _request_initial_plan_and_all_coder_instructions(self):
         prompt_text_parts = [
-            "You are an expert AI system planner and lead developer. Your task is to plan a multi-file application "
-            "based on the user's request and provide **highly detailed, self-contained instructions for a specialized "
-            "Coder AI for EACH file** that needs to be created or modified.\n"
-            "For each file, also consider if providing 1-2 brief, relevant code examples from the RAG context would significantly help the Coder AI produce higher quality code (e.g., for complex logic, specific class structures, or idiomatic patterns). If so, include a placeholder like `[RAG_EXAMPLES_REQUESTED_FOR_THIS_FILE]` within your natural language plan for that file. The orchestrating system will attempt to fetch these examples.\n\n"
+            "You are an expert AI system planner. Your task is to prepare a plan and detailed instructions for a separate Coder AI to implement a user's request. "
+            "Your response MUST be structured exactly as follows, with NO conversational text outside of this structure.\n\n"
         ]
 
         if self._current_phase == ModPhase.ALL_FILES_GENERATED_AWAITING_USER_ACTION and self._original_query != self._original_query_at_start:
             prompt_text_parts.append(
-                f"This is a REFINEMENT of a previous overall plan based on user feedback after all files were generated. "
-                f"The original goal was: \"{self._original_query_at_start}\".\n"
-                f"The user's latest feedback on the generated files (potentially affecting multiple files) is: \"{self._original_query}\".\n"
-                f"Re-evaluate the entire plan and all Coder AI instructions. Identify ALL files that need to be changed (added, modified, or if a previously modified file now needs no changes or different changes) based on this feedback.\n\n"
+                f"This is a REFINEMENT. Original Goal: \"{self._original_query_at_start}\". User Feedback: \"{self._original_query}\". "
+                f"Re-evaluate ALL files and Coder AI instructions based on this feedback.\n\n"
             )
-            if self._llm_comm_logger:
-                self._llm_comm_logger.log_message("[Planner AI Req]",
-                                                  f"Requesting refinement. Original Goal: '{self._original_query_at_start[:100]}...'. User Feedback: '{self._original_query[:100]}...'")
         else:
-            prompt_text_parts.append(
-                f"Implement the following user request:\nUSER REQUEST: \"{self._original_query_at_start}\"\n\n")
-            if self._llm_comm_logger:
-                self._llm_comm_logger.log_message("[Planner AI Req]",
-                                                  f"User Query: \"{self._original_query_at_start[:150]}...\" Context Provided: {bool(self._original_context_from_rag)}, Focus Prefix: '{self._original_focus_prefix or 'N/A'}'")
+            prompt_text_parts.append(f"USER REQUEST: \"{self._original_query_at_start}\"\n\n")
 
         prompt_text_parts.extend([
             f"ASSOCIATED PROJECT CONTEXT (from RAG, if any):\n{self._original_context_from_rag or 'N/A'}\n\n",
             f"PROJECT ROOT FOCUS (base path for relative file paths, if provided by user):\n{self._original_focus_prefix or 'N/A'}\n\n",
-            "Your response MUST include THE FOLLOWING TWO PARTS, clearly demarcated:\n\n",
-            "PART 1: FILES_TO_MODIFY\n"
-            "This line MUST start EXACTLY with 'FILES_TO_MODIFY: ' followed by a Python-style list of relative file paths "
-            "(e.g., FILES_TO_MODIFY: ['src/main.py', 'app/utils/helpers.py', 'new_module/service.py']). "
-            "Use forward slashes for paths. If no files need changes, use FILES_TO_MODIFY: []. "
-            "This line should appear first or very early in your response.\n\n",
-            "PART 2: PER_FILE_CODER_INSTRUCTIONS\n"
-            "For EACH file listed in FILES_TO_MODIFY, you MUST provide a dedicated section. Each section must contain:\n"
-            "   a. A clear START marker: `--- CODER_INSTRUCTIONS_START: path/to/filename.ext ---` (replace with the actual relative path from the FILES_TO_MODIFY list).\n"
-            "   b. A DETAILED NATURAL LANGUAGE PLAN for that specific file. This plan should include:\n"
-            "      - The file's primary purpose and responsibility within the project.\n"
-            "      - Specific classes, functions, methods, and logic to be implemented in THIS FILE.\n"
-            "      - Key data structures or algorithms to be used in THIS FILE.\n"
-            "      - Necessary imports FOR THIS FILE (suggest them clearly, e.g., 'from .models import User' or 'import os').\n"
-            "      - State clearly if the file is NEW or an UPDATE to an existing one. (The orchestrating system will provide existing code to the Coder AI if it's an update based on your indication here).\n"
-            "      - Explicitly state any interactions with other planned files IF those interactions define requirements for THIS file's content (e.g., 'This file should define a class MyClass that will be imported and used by other_file.py').\n"
-            "      - If helpful, include the placeholder `[RAG_EXAMPLES_REQUESTED_FOR_THIS_FILE]` if you believe RAG examples are beneficial for this specific file's generation.\n"
-            "   c. A CRITICAL OUTPUT FORMAT REMINDER to the Coder AI for this specific file:\n"
-            "      \"IMPORTANT CODER OUTPUT FORMAT: Your response for this file (`path/to/filename.ext`) MUST be ONLY ONE single standard Markdown fenced code block, starting with ```python path/to/filename.ext\\n and ending with ```. ABSOLUTELY NO other text, explanations, or conversational fluff anywhere in your response.\"\n"
-            "   d. A clear END marker: `--- CODER_INSTRUCTIONS_END: path/to/filename.ext ---`\n\n",
-            "**Overall Production Quality Standards (Apply to ALL generated code by the Coder AI):**\n"
-            "All generated Python code must adhere to PEP 8 (max line length 99 characters), include type hints for all function arguments, return values, and critical variables (PEP 484), "
-            "have comprehensive docstrings for all modules, classes, functions, and methods (PEP 257), and use inline comments for complex or non-obvious logic. "
-            "Ensure code is modular, functional, and correctly implements the specified requirements. Organize imports as per PEP 8.\n\n",
-            "Generate the complete response now, including both parts, ensuring all paths use forward slashes."
+            "**CRITICAL OUTPUT STRUCTURE:**\n\n",
+            "**PART 1: FILES_TO_MODIFY**\n"
+            "FILES_TO_MODIFY: ['path/to/file1.ext', 'path/to/file2.ext', ...]\n"
+            "(This line MUST start EXACTLY with 'FILES_TO_MODIFY: ' followed by a Python-style list of relative file paths. Use forward slashes. If no files, use []. This MUST be the first part of your response after any initial preamble like 'USER REQUEST: ...')\n\n",
+            "**PART 2: PER_FILE_CODER_INSTRUCTIONS**\n"
+            "For EACH file listed in FILES_TO_MODIFY, provide a section formatted EXACTLY like this:\n\n"
+            "--- CODER_INSTRUCTIONS_START: path/to/filename.ext ---\n"
+            "File Purpose: [Briefly describe the file's role and purpose.]\n"
+            "Is New File: [State 'Yes' if new, 'No' if updating an existing file.]\n"
+            "Key Requirements:\n"
+            "- [Detailed natural language instruction 1 for the Coder AI for THIS file. Describe WHAT to do, not HOW to code it. E.g., 'Create a function `my_func` that takes `arg1` (string) and `arg2` (int) and returns their concatenation.']\n"
+            "- [Detailed natural language instruction 2 for the Coder AI for THIS file.]\n"
+            "- ... more instructions ...\n"
+            "Imports Needed: [Suggest imports, e.g., 'import os', 'from .utils import helper_func'.]\n"
+            "Interactions: [Describe how this file interacts with other planned files, if applicable.]\n"
+            "RAG Context Request: [Optional: Include `[RAG_EXAMPLES_REQUESTED_FOR_THIS_FILE]` if RAG snippets would be helpful for the Coder AI for THIS file.]\n"
+            "IMPORTANT CODER OUTPUT FORMAT: Your response for this file (`path/to/filename.ext`) MUST be ONLY ONE single standard Markdown fenced code block, starting with ```python path/to/filename.ext\\n and ending with ```. ABSOLUTELY NO other text, explanations, or conversational fluff anywhere in your response.\n"
+            "--- CODER_INSTRUCTIONS_END: path/to/filename.ext ---\n\n"
+            "(Repeat the above ---START--- to ---END--- block for EACH file in the FILES_TO_MODIFY list.)\n\n",
+            "**Overall Production Quality Standards for Coder AI (You do not need to repeat this, it's a global instruction for the Coder AI that will be passed on):**\n"
+            "All generated Python code must adhere to PEP 8 (max line length 99 characters), include type hints (PEP 484), comprehensive docstrings (PEP 257), and inline comments for complex logic. Code must be modular, functional, and correct.\n\n",
+            "Provide your complete structured response now."
         ])
         prompt_text = "".join(prompt_text_parts)
 
@@ -219,9 +204,14 @@ class ModificationCoordinator(QObject):
 
         status_msg_for_ui = "[System: Asking Planner AI to create modification plan and coder instructions...]"
         self.status_update.emit(status_msg_for_ui)
-        # Already logged the request details above based on refinement or initial request.
+
         if self._llm_comm_logger:
             self._llm_comm_logger.log_message("[System]", "Sending request to Planner AI...")
+            if len(prompt_text) < 1000: # Log shorter prompts for easier debugging
+                 self._llm_comm_logger.log_message("[Planner AI Req Full Prompt]", prompt_text)
+            else:
+                 self._llm_comm_logger.log_message("[Planner AI Req Summary]", f"Prompt length: {len(prompt_text)}, starts with: '{prompt_text[:200]}...'")
+
 
         self.request_llm_call.emit(PLANNER_BACKEND_ID, history_for_llm)
 
@@ -249,6 +239,8 @@ class ModificationCoordinator(QObject):
         if self._llm_comm_logger:
             self._llm_comm_logger.log_message("[Planner AI Res]",
                                               f"Received plan. Length: {len(self._full_planner_output_text)}. Parsing...")
+            if len(self._full_planner_output_text) < 2000: # Log shorter responses
+                self._llm_comm_logger.log_message("[Planner AI Res Full]", self._full_planner_output_text)
 
         parsed_files_list, error_msg_parse_files = self._parse_files_to_modify_list(self._full_planner_output_text)
         if error_msg_parse_files or parsed_files_list is None:
@@ -285,16 +277,19 @@ class ModificationCoordinator(QObject):
             try:
                 start_idx_find = self._full_planner_output_text.find(start_marker, current_search_pos)
                 if start_idx_find == -1:
+                    logger.warning(f"Could not find start marker '{start_marker}' for '{filename_in_list}' after position {current_search_pos}.")
                     pass
                 else:
                     start_idx_content = start_idx_find + len(start_marker)
                     end_idx_find = self._full_planner_output_text.find(end_marker, start_idx_content)
                     if end_idx_find == -1:
+                        logger.warning(f"Could not find end marker '{end_marker}' for '{filename_in_list}' after start marker.")
                         pass
                     else:
                         instruction_text = self._full_planner_output_text[start_idx_content:end_idx_find].strip()
-                        current_search_pos = end_idx_find + len(end_marker)
+                        current_search_pos = end_idx_find + len(end_marker) # Update search position
             except Exception as e_extract:
+                logger.error(f"Error during marker extraction for {filename_in_list}: {e_extract}")
                 pass
 
             if instruction_text:
@@ -303,17 +298,17 @@ class ModificationCoordinator(QObject):
                     self._llm_comm_logger.log_message("[Planner AI]",
                                                       f"Extracted coder instructions for: {filename_in_list} (Length: {len(instruction_text)})")
             else:
-                err_instr_msg = f"[Error: Planner failed to provide Coder AI instructions for {filename_in_list}]"
+                err_instr_msg = f"[Error: Planner failed to provide Coder AI instructions for {filename_in_list} using exact markers. Please check Planner AI output formatting.]"
                 self._coder_instructions_map[filename_in_list] = err_instr_msg
                 all_instructions_extracted = False
                 if self._llm_comm_logger:
                     self._llm_comm_logger.log_message("[System Error]",
-                                                      f"Failed to extract coder instructions for: {filename_in_list}")
+                                                      f"Failed to extract coder instructions for: {filename_in_list}. Markers might be missing/malformed.")
 
         if not all_instructions_extracted or len(self._coder_instructions_map) != len(self._planned_files_list):
             if all(val.startswith("[Error:") for val in self._coder_instructions_map.values()):
                 self.modification_error.emit(
-                    "Planner AI failed to provide valid instructions for ANY of the planned files. Cannot proceed.")
+                    "Planner AI failed to provide valid instructions for ANY of the planned files. Cannot proceed. Check LLM Log for Planner output.")
                 if self._llm_comm_logger:
                     self._llm_comm_logger.log_message("[System Error]",
                                                       "Planner AI failed to provide valid instructions for ANY planned files. Sequence cannot proceed.")
@@ -322,14 +317,14 @@ class ModificationCoordinator(QObject):
                 return
             else:
                 self.modification_error.emit(
-                    "Planner AI failed to provide instructions for some planned files. Those files may be skipped or incomplete.")
+                    "Planner AI failed to provide instructions for some planned files (check LLM Log). Those files may be skipped or incomplete.")
                 if self._llm_comm_logger:
                     self._llm_comm_logger.log_message("[System Warning]",
                                                       "Planner AI failed to provide instructions for SOME planned files. Proceeding with available ones.")
 
         self._generated_file_data = {}
         if not any(val and not val.startswith("[Error:") for val in self._coder_instructions_map.values()):
-            self.modification_error.emit("Planner AI did not provide any valid Coder AI instructions for any file.")
+            self.modification_error.emit("Planner AI did not provide any valid Coder AI instructions for any file. Check LLM Log.")
             if self._llm_comm_logger:
                 self._llm_comm_logger.log_message("[System Error]",
                                                   "No valid Coder AI instructions found for any file after parsing. Sequence cannot proceed.")
@@ -430,9 +425,8 @@ class ModificationCoordinator(QObject):
         if rag_examples_str:
             final_coder_prompt_parts.append(rag_examples_str)
 
-        is_new_file_from_planner_instr = "new file" in coder_instruction_for_file.lower() or \
-                                         "is new" in coder_instruction_for_file.lower() or \
-                                         "create it entirely from scratch" in coder_instruction_for_file.lower()
+        is_new_file_from_planner_instr = "new file: yes" in coder_instruction_for_file.lower() or \
+                                         "is new file: yes" in coder_instruction_for_file.lower()
 
         if original_file_content is not None:
             if is_new_file_from_planner_instr:
@@ -447,17 +441,17 @@ class ModificationCoordinator(QObject):
                 f"You MUST use this original content as the foundation and apply the necessary modifications "
                 f"as detailed in the instructions below.\n\n"
             )
-        elif not is_new_file_from_planner_instr:
+        elif not is_new_file_from_planner_instr: # Planner said "Is New File: No" but file doesn't exist
             final_coder_prompt_parts.append(
-                f"The file `{filename}` was planned (possibly as an update), but no original content was found. "
+                f"The file `{filename}` was planned as an UPDATE (Is New File: No), but no original content was found. "
                 f"Therefore, treat this as a NEW file creation, following the instructions below.\n\n"
             )
             if self._llm_comm_logger:
                 self._llm_comm_logger.log_message("[System Info]",
                                                   f"File '{filename}' planned as update, but no original content found. Treating as new.")
-        else:
+        else: # Planner said "Is New File: Yes" and file doesn't exist (normal new file case)
             final_coder_prompt_parts.append(
-                f"The file `{filename}` is NEW. Create it from scratch based on the instructions below.\n\n"
+                f"The file `{filename}` is NEW (Is New File: Yes). Create it from scratch based on the instructions below.\n\n"
             )
 
         final_coder_prompt_parts.extend([
@@ -848,37 +842,46 @@ class ModificationCoordinator(QObject):
     def _parse_files_to_modify_list(self, response_text: str) -> Tuple[Optional[List[str]], Optional[str]]:
         marker = "FILES_TO_MODIFY:"
         try:
-            marker_pos = response_text.index(marker)
-            list_str_start = marker_pos + len(marker)
-        except ValueError:
-            match_marker = re.search(r"FILES_TO_MODIFY\s*:", response_text, re.IGNORECASE)
-            if not match_marker:
-                return None, f"Marker '{marker}' or similar variant not found in Planner response."
-            list_str_start = match_marker.end()
+            # Try to find the marker case-sensitively first
+            marker_pos = response_text.find(marker)
+            if marker_pos == -1: # If not found, try case-insensitively
+                 match_marker_re = re.search(r"FILES_TO_MODIFY\s*:", response_text, re.IGNORECASE)
+                 if not match_marker_re:
+                     return None, f"Marker '{marker}' (case-sensitive or insensitive) not found in Planner response."
+                 list_str_start = match_marker_re.end()
+            else:
+                list_str_start = marker_pos + len(marker)
+
+        except ValueError: # Should not happen with find if it returns -1
+            return None, f"Marker '{marker}' not found in Planner response (ValueError)."
+
 
         potential_list_str = response_text[list_str_start:].strip()
         first_line_of_potential_list = potential_list_str.split('\n', 1)[0].strip()
         list_str_for_eval = None
-        list_match = re.search(r"(\[.*?\])", first_line_of_potential_list)
 
-        if list_match:
-            list_str_for_eval = list_match.group(1)
-        elif first_line_of_potential_list.startswith('[') and first_line_of_potential_list.endswith(']'):
-            list_str_for_eval = first_line_of_potential_list
+        list_match_bracket = re.match(r"(\[.*?\])", first_line_of_potential_list)
+
+        if list_match_bracket:
+            list_str_for_eval = list_match_bracket.group(1)
         else:
-            multiline_list_match = re.search(r"^\s*(\[.*?\])", potential_list_str, re.MULTILINE | re.DOTALL)
+            # If not on the first line, try to find the list using a more general regex
+            # looking for a Python list structure that might span multiple lines
+            # or be preceded by some conversational text.
+            multiline_list_match = re.search(r"\[\s*(?:(?:'.*?'|\".*?\")\s*,\s*)*\s*(?:'.*?'|\".*?\")?\s*\]", potential_list_str, re.DOTALL)
             if multiline_list_match:
-                list_str_for_eval = multiline_list_match.group(1)
+                list_str_for_eval = multiline_list_match.group(0) # group(0) is the whole match
             else:
-                return None, "FILES_TO_MODIFY list not found or not correctly formatted with brackets on the first line (or subsequent lines) after the marker."
+                return None, "FILES_TO_MODIFY list not found or not correctly formatted with brackets starting on the first line or as a recognizable Python list after the marker."
         try:
-            if list_str_for_eval.lower().startswith("python"):
+            if list_str_for_eval.lower().startswith("python"): # Remove potential 'python' prefix
                 list_str_for_eval = re.sub(r"^[Pp][Yy][Tt][Hh][Oo][Nn]\s*", "", list_str_for_eval)
+
             parsed_list = ast.literal_eval(list_str_for_eval)
             if not isinstance(parsed_list, list):
                 return None, "Parsed data for FILES_TO_MODIFY is not a list."
             cleaned_list = [str(f).strip().replace("\\", "/") for f in parsed_list if isinstance(f, (str, int, float))]
-            return [f_item for f_item in cleaned_list if f_item], None
+            return [f_item for f_item in cleaned_list if f_item], None # Filter out empty strings
         except (ValueError, SyntaxError, TypeError) as e:
             return None, f"Error parsing FILES_TO_MODIFY list string '{list_str_for_eval}': {e}"
 
@@ -889,7 +892,7 @@ class ModificationCoordinator(QObject):
         self._handle_sequence_end(reason, f"Sequence cancelled: {reason}")
 
     def _handle_sequence_end(self, reason: str, details: Optional[str] = None):
-        if not self._is_active and reason != "error_processing_llm_response":
+        if not self._is_active and reason != "error_processing_llm_response": # Allow error processing even if not active
             return
 
         log_message = f"MC: Ending sequence. Reason: {reason}."
