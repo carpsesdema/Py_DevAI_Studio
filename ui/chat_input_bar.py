@@ -1,19 +1,17 @@
 # Llama_Syn/ui/chat_input_bar.py
-# UPDATED FILE - Added attach image button and logic, loads custom icon
+# UPDATED FILE - Correct tooltip for standard Enter=Send behavior
 
 import logging
 import os
 from typing import Optional, List
 
 from PyQt6.QtCore import pyqtSignal, QSize, pyqtSlot
-from PyQt6.QtGui import QFont, QIcon  # Added QIcon
-# --- PyQt6 Imports ---
+from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QSizePolicy, QFileDialog,
     QLabel
 )
 
-# --- Local Imports ---
 from utils import constants
 from .loading_indicator import LoadingIndicator
 from .multiline_input_widget import MultilineInputWidget
@@ -31,10 +29,6 @@ logger = logging.getLogger(__name__)
 
 
 class ChatInputBar(QWidget):
-    """
-    A composite widget containing the multi-line text input, attach button,
-    loading indicator, and send button. Handles image attachment.
-    """
     sendMessageRequested = pyqtSignal(str, list)
 
     INDICATOR_SIZE = QSize(24, 24)
@@ -61,18 +55,15 @@ class ChatInputBar(QWidget):
         self._update_button_state()
 
     def _init_ui(self):
-        """Set up the internal layout and widgets."""
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(5, 0, 5, 0)
         main_layout.setSpacing(5)
 
-        # --- Add Attach Button with Custom Icon ---
         self._attach_button = QPushButton(self)
         self._attach_button.setObjectName("AttachButton")
         self._attach_button.setToolTip("Attach Image(s)")
 
-        # --- Load Custom Icon ---
-        custom_icon_path = os.path.join(constants.ASSETS_PATH, "attach_icon.svg")  # Assumes your icon is named this
+        custom_icon_path = os.path.join(constants.ASSETS_PATH, "attach_icon.svg")
         if os.path.exists(custom_icon_path):
             custom_icon = QIcon(custom_icon_path)
             if not custom_icon.isNull():
@@ -80,42 +71,39 @@ class ChatInputBar(QWidget):
                 logger.info(f"Loaded custom attach icon from: {custom_icon_path}")
             else:
                 logger.warning(f"Custom attach icon loaded but is null: {custom_icon_path}")
-                self._attach_button.setText("+")  # Fallback text
+                self._attach_button.setText("+")
         else:
             logger.warning(f"Custom attach icon not found: {custom_icon_path}. Using fallback text.")
-            self._attach_button.setText("+")  # Fallback text
-        # --- End Custom Icon Loading ---
+            self._attach_button.setText("+")
 
         self._attach_button.setFixedSize(self.ATTACH_BUTTON_SIZE)
-        self._attach_button.setIconSize(self.ATTACH_BUTTON_SIZE - QSize(8, 8))  # Make icon slightly smaller than button
+        self._attach_button.setIconSize(self.ATTACH_BUTTON_SIZE - QSize(8, 8))
         self._attach_button.setEnabled(IMAGE_SERVICE_AVAILABLE)
         main_layout.addWidget(self._attach_button)
-        # ------------------------
 
-        # Multiline Input
         self._multiline_input = MultilineInputWidget(self)
-        main_layout.addWidget(self._multiline_input, 1)  # Input widget stretches
+        main_layout.addWidget(self._multiline_input, 1)
 
-        # Loading Indicator
         self._loading_indicator = LoadingIndicator(self)
         self._loading_indicator.setObjectName("InputBarLoadingIndicator")
         self._loading_indicator.setFixedSize(self.INDICATOR_SIZE)
         self._loading_indicator.setVisible(False)
         main_layout.addWidget(self._loading_indicator)
 
-        # Send button
         self._send_button = QPushButton("Send", self)
         self._send_button.setObjectName("SendButton")
         send_button_font = QFont(constants.CHAT_FONT_FAMILY, constants.CHAT_FONT_SIZE - 1)
         self._send_button.setFont(send_button_font)
+        # Corrected tooltip for standard behavior
         self._send_button.setToolTip("Send message (Enter) or add newline (Shift+Enter)")
-        self._send_button.setDefault(True)
+        # Ensure setDefault is NOT True to prevent double send issues
+        # self._send_button.setDefault(True) # THIS LINE REMAINS COMMENTED OUT/REMOVED
+
         self._send_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._send_button.adjustSize()
         main_layout.addWidget(self._send_button)
 
     def _connect_signals(self):
-        """Connect internal widget signals."""
         if self._multiline_input:
             self._multiline_input.sendMessageRequested.connect(self._on_send)
             self._multiline_input.textChanged.connect(self._update_button_state)
@@ -128,7 +116,6 @@ class ChatInputBar(QWidget):
 
     @pyqtSlot()
     def _handle_attach_image(self):
-        """Opens file dialog to select images."""
         if not self._image_service:
             logger.warning("Image service not available, cannot attach images.")
             return
@@ -148,7 +135,6 @@ class ChatInputBar(QWidget):
             self._update_button_state()
 
     def _update_attachment_display(self):
-        """Updates UI element to show attached files (e.g., tooltip or label)."""
         if self._attach_button:
             if self._attached_image_paths:
                 filenames = [os.path.basename(p) for p in self._attached_image_paths]
@@ -160,7 +146,6 @@ class ChatInputBar(QWidget):
 
     @pyqtSlot()
     def _on_send(self):
-        """Handles send action, processes images, and emits signal."""
         if not self._is_enabled or self._is_busy:
             return
 
@@ -202,7 +187,6 @@ class ChatInputBar(QWidget):
 
     @pyqtSlot(bool)
     def handle_busy_state(self, is_busy: bool):
-        """Handles busy state for enabling/disabling input/button AND indicator."""
         logger.debug(f"ChatInputBar handling busy state: {is_busy}")
         if self._is_busy == is_busy:
             return
@@ -225,19 +209,16 @@ class ChatInputBar(QWidget):
 
     @pyqtSlot()
     def _update_button_state(self):
-        """Update send button based on text, attachments, and busy state."""
         if self._send_button:
             has_text = bool(self.get_text())
             has_attachments = bool(self._attached_image_paths)
             can_send = self._is_enabled and not self._is_busy and (has_text or has_attachments)
             self._send_button.setEnabled(can_send)
 
-    # --- Public Methods ---
     def get_text(self) -> str:
         return self._multiline_input.get_text() if self._multiline_input else ""
 
     def clear_text(self):
-        """Clears text and attachments."""
         if self._multiline_input:
             self._multiline_input.clear_text()
         self._attached_image_paths = []
