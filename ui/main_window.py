@@ -244,13 +244,13 @@ class MainWindow(QMainWindow):
         if project_manager:
             project_manager.active_project_changed.connect(self._handle_active_project_changed_globally)
             project_manager.project_list_updated.connect(self.left_panel.update_project_list)
-            self.left_panel.create_project_requested.connect(lambda: project_manager.show_project_management_dialog(self))
+            self.left_panel.create_project_requested.connect(self._handle_create_project_dialog)
             self.left_panel.project_selected_from_ui.connect(project_manager.set_active_project_id)
 
         llm_manager = self.orchestrator.get_llm_manager()
         if llm_manager:
-            self.left_panel.chat_llm_changed.connect(llm_manager.set_active_chat_llm)
-            self.left_panel.coding_llm_changed.connect(llm_manager.set_active_coding_llm)
+            self.left_panel.chat_llm_changed.connect(self._handle_chat_llm_changed_from_ui)
+            self.left_panel.coding_llm_changed.connect(self._handle_coding_llm_changed_from_ui)
             self.left_panel.temperature_changed.connect(self._handle_temperature_change_from_ui)
 
         self.left_panel.open_file_requested.connect(self.code_editor_pane.display_single_file)
@@ -259,8 +259,8 @@ class MainWindow(QMainWindow):
         self.left_panel.configure_persona_requested.connect(self._show_personality_dialog)
         self.left_panel.view_project_rag_requested.connect(self._show_rag_viewer_dialog)
         self.left_panel.manage_global_rag_requested.connect(self._show_rag_viewer_dialog)
-        self.left_panel.upload_files_to_project_requested.connect(self._handle_upload_files_to_active_project_rag) # New
-        self.left_panel.upload_folder_to_project_requested.connect(self._handle_upload_folder_to_active_project_rag) # New
+        self.left_panel.upload_files_to_project_requested.connect(self._handle_upload_files_to_active_project_rag)
+        self.left_panel.upload_folder_to_project_requested.connect(self._handle_upload_folder_to_active_project_rag)
 
 
         if llm_manager:
@@ -293,37 +293,69 @@ class MainWindow(QMainWindow):
     def _handle_create_project_dialog(self):
         project_manager = self.orchestrator.get_project_manager()
         if project_manager:
-            project_manager.show_project_management_dialog(self)
+            # Instantiate and show the dialog
+            if self._project_management_dialog is None:
+                self._project_management_dialog = ProjectManagementDialog(project_manager, self.settings, self)
+                self._project_management_dialog.project_action_completed.connect(self._handle_project_action_from_dialog)
+                self._project_management_dialog.finished.connect(self._on_project_management_dialog_closed)
+
+            if not self._project_management_dialog.isVisible():
+                self._project_management_dialog.show()
+                self._project_management_dialog.activateWindow()
+                self._project_management_dialog.raise_()
+            else:
+                self._project_management_dialog.activateWindow()
+                self._project_management_dialog.raise_()
         else:
             self.update_status("Project Manager not available.", "#e06c75", True, 3000)
+
+    @pyqtSlot(str)
+    def _handle_project_action_from_dialog(self, active_project_id: str):
+        # This slot is called when ProjectManagementDialog signals an action
+        # (like create, open, or remove which might change active project)
+        logger.info(f"MainWindow: Project action completed via dialog, new active project ID: {active_project_id}")
+        # The active_project_changed signal from ProjectManager should handle UI updates
+        # but we can ensure UI consistency here if needed, e.g. window title.
+        self.update_window_title(active_project_id)
+        if self.left_panel:
+            self.left_panel.update_project_list(self.orchestrator.get_project_manager().get_project_name_map())
+            self.left_panel.update_active_project_selection(active_project_id)
+
+
+    @pyqtSlot(int)
+    def _on_project_management_dialog_closed(self, result: int):
+        logger.debug(f"ProjectManagementDialog closed with result: {result}")
+        # Can do additional cleanup or refresh if necessary
 
 
     @pyqtSlot(object)
     def _handle_user_message_to_chat_pane_model(self, message: Any):
         if self.chat_pane:
-            self.chat_pane.add_user_message_to_display(message)
+            self.chat_pane.add_user_message_to_display(message) # type: ignore
             if self.orchestrator and self.orchestrator.get_project_manager():
                 active_project_id = self.orchestrator.get_project_manager().get_active_project_id()
                 if active_project_id:
+                    # Ensure message is a dict if ChatMessage.to_dict() is used
+                    msg_dict_to_save = message.to_dict() if hasattr(message, 'to_dict') else message
                     self.orchestrator.get_project_manager().add_message_to_history(
                         project_id=active_project_id,
-                        message_dict=message.to_dict()
+                        message_dict=msg_dict_to_save
                     )
 
     @pyqtSlot(str)
     def _handle_active_project_changed_globally(self, project_id: Optional[str]):
         logger.info(f"MainWindow: Global active project changed to: {project_id}")
         if self.left_panel:
-            self.left_panel.update_active_project_selection(project_id)
+            self.left_panel.update_active_project_selection(project_id) # type: ignore
         if self.project_explorer_pane:
             self.project_explorer_pane.load_project_by_id(project_id if project_id else None)
 
 
         if self.chat_pane:
-            self.chat_pane.load_chat_history(project_id if project_id else "")
+            self.chat_pane.load_chat_history(project_id if project_id else "") # type: ignore
 
         if self.code_editor_pane:
-            self.code_editor_pane.clear_all_files()
+            self.code_editor_pane.clear_all_files() # type: ignore
 
         self.update_window_title(project_id)
         active_project_name = "None"
@@ -345,7 +377,7 @@ class MainWindow(QMainWindow):
     def _handle_active_llms_changed_in_core(self, provider_name: str, model_id: str, is_chat_llm: bool):
         logger.info(f"MainWindow: Core LLM change. Provider: {provider_name}, Model: {model_id}, IsChat: {is_chat_llm}")
         if self.left_panel:
-            self.left_panel.update_llm_selection_from_core(provider_name, model_id, is_chat_llm)
+            self.left_panel.update_llm_selection_from_core(provider_name, model_id, is_chat_llm) # type: ignore
         self.update_window_title()
         llm_type_str = "Chat LLM" if is_chat_llm else "Coding LLM"
         self.update_status(f"{llm_type_str} set to: {model_id.split('/')[-1]} ({provider_name})", "#98c379", True, 3000)
@@ -354,15 +386,15 @@ class MainWindow(QMainWindow):
     def _handle_chat_llm_response(self, message_text_chunk: str, is_final_or_error: bool):
         if self.chat_pane:
             if is_final_or_error:
-                if "Error:" in message_text_chunk:
-                    self.chat_pane.add_message_from_llm(message_text_chunk, True)
-                    self.chat_pane.update_busy_state(False)
+                if "Error:" in message_text_chunk: # type: ignore
+                    self.chat_pane.add_message_from_llm(message_text_chunk, True) # type: ignore
+                    self.chat_pane.update_busy_state(False) # type: ignore
                 else:
-                    self.chat_pane.add_message_from_llm(message_text_chunk, False) # Final chunk
-                    self.chat_pane.update_busy_state(False)
+                    self.chat_pane.add_message_from_llm(message_text_chunk, False) # Final chunk # type: ignore
+                    self.chat_pane.update_busy_state(False) # type: ignore
             else: # Streaming chunk
-                self.chat_pane.update_busy_state(True)
-                self.chat_pane.add_message_from_llm(message_text_chunk, False)
+                self.chat_pane.update_busy_state(True) # type: ignore
+                self.chat_pane.add_message_from_llm(message_text_chunk, False) # type: ignore
 
 
     @pyqtSlot(str, str)
@@ -370,21 +402,21 @@ class MainWindow(QMainWindow):
         logger.error(f"MainWindow: LLM Error from {llm_type} LLM: {error_message}")
         self.update_status(f"Error from {llm_type} LLM: {error_message[:100]}...", "#e06c75", True, 5000)
         if self.chat_pane and llm_type.lower() == "chat":
-            self.chat_pane.add_message_from_llm(f"LLM Error: {error_message}", True)
-            self.chat_pane.update_busy_state(False)
+            self.chat_pane.add_message_from_llm(f"LLM Error: {error_message}", True) # type: ignore
+            self.chat_pane.update_busy_state(False) # type: ignore
 
     @pyqtSlot(str, bool)
     def _handle_generation_sequence_complete(self, final_message: str, was_successful: bool):
         self.update_status(final_message, "#98c379" if was_successful else "#e5c07b", True, 5000)
         if was_successful and "written" in final_message.lower():
             if self.project_explorer_pane:
-                self.project_explorer_pane._refresh_view()
+                self.project_explorer_pane._refresh_view() # type: ignore
 
     @pyqtSlot(list)
     def _handle_all_files_written(self, written_file_paths: List[str]):
         self.update_status(f"Successfully wrote {len(written_file_paths)} files to disk.", "#98c379", True, 4000)
         if self.project_explorer_pane:
-            self.project_explorer_pane._refresh_view()
+            self.project_explorer_pane._refresh_view() # type: ignore
 
     @pyqtSlot(str, str)
     def _handle_file_write_error(self, file_path: str, error_msg: str):
@@ -428,7 +460,7 @@ class MainWindow(QMainWindow):
         main_splitter = self.findChild(QSplitter, "MainWindowSplitter")
         if main_splitter: self.settings.set("splitter_sizes_main", main_splitter.sizes())
 
-        log_terminal = self.findChild(LlmLogTerminal)
+        log_terminal = self.findChild(LlmLogTerminal) # type: ignore
         if log_terminal and isinstance(log_terminal, LlmLogTerminal):
             self.settings.set("log_terminal_height", log_terminal.height())
 
@@ -451,19 +483,19 @@ class MainWindow(QMainWindow):
         if self._project_management_dialog and self._project_management_dialog.isVisible():
             self._project_management_dialog.done(0)
         if self.llm_log_terminal and hasattr(self.llm_log_terminal, 'cleanup'):
-            self.llm_log_terminal.cleanup()
+            self.llm_log_terminal.cleanup() # type: ignore
         if self.orchestrator:
             self.orchestrator.shutdown_services()
         logger.info("MainWindow cleanup finished.")
 
-    @pyqtSlot(str, str, Optional[str])
+    @pyqtSlot(str, str, object) # MODIFIED: Optional[str] -> object
     def _handle_chat_llm_changed_from_ui(self, provider_name: str, model_id: str, api_key: Optional[str]):
         if self.orchestrator and self.orchestrator.get_llm_manager():
             asyncio.create_task(
                 self.orchestrator.get_llm_manager().set_active_chat_llm(provider_name, model_id, api_key)
             )
 
-    @pyqtSlot(str, str, Optional[str])
+    @pyqtSlot(str, str, object) # MODIFIED: Optional[str] -> object
     def _handle_coding_llm_changed_from_ui(self, provider_name: str, model_id: str, api_key: Optional[str]):
         if self.orchestrator and self.orchestrator.get_llm_manager():
             asyncio.create_task(
@@ -538,8 +570,8 @@ class MainWindow(QMainWindow):
         logger.info("SettingsDialog reported settings have been applied.")
         self.update_status("Settings updated.", "#98c379", True, 3000)
         if self.left_panel:
-            self.left_panel.load_initial_settings()
-            asyncio.create_task(self.left_panel.async_populate_llm_combos())
+            self.left_panel.load_initial_settings() # type: ignore
+            asyncio.create_task(self.left_panel.async_populate_llm_combos()) # type: ignore
 
         if self.orchestrator and self.orchestrator.get_llm_manager():
             llm_manager = self.orchestrator.get_llm_manager()
@@ -633,7 +665,7 @@ class MainWindow(QMainWindow):
                 if self.orchestrator.get_project_manager():
                     active_project = self.orchestrator.get_project_manager().get_active_project()
                     if active_project and self.orchestrator.get_rag_service():
-                        target_collection_id = self.orchestrator.get_rag_service()._get_project_rag_collection_id(active_project.id)
+                        target_collection_id = self.orchestrator.get_rag_service()._get_project_rag_collection_id(active_project.id) # type: ignore
                         logger.info(f"RAG Viewer requested for Project: {active_project.name} (Coll ID: {target_collection_id})")
                     elif active_project:
                          logger.warning(f"RAG Viewer requested for Project {active_project.name}, but RAG service missing.")
@@ -650,23 +682,23 @@ class MainWindow(QMainWindow):
 
         if not self._rag_viewer_dialog.isVisible():
             self._rag_viewer_dialog.show()
-            if self._rag_viewer_dialog._collections_combo:
+            if self._rag_viewer_dialog._collections_combo: # type: ignore
                 if target_collection_id:
-                    combo = self._rag_viewer_dialog._collections_combo
+                    combo = self._rag_viewer_dialog._collections_combo # type: ignore
                     for i in range(combo.count()):
                         if combo.itemData(i) == target_collection_id:
                             combo.setCurrentIndex(i)
-                            self._rag_viewer_dialog._update_ui_for_selected_collection()
+                            self._rag_viewer_dialog._update_ui_for_selected_collection() # type: ignore
                             break
-                elif self._rag_viewer_dialog._collections_combo.count() > 0:
-                    self._rag_viewer_dialog._on_collection_selected(0)
+                elif self._rag_viewer_dialog._collections_combo.count() > 0: # type: ignore
+                    self._rag_viewer_dialog._on_collection_selected(0) # type: ignore
 
 
             self._rag_viewer_dialog.activateWindow()
             self._rag_viewer_dialog.raise_()
         else:
-            if target_collection_id and self._rag_viewer_dialog._collections_combo:
-                combo = self._rag_viewer_dialog._collections_combo
+            if target_collection_id and self._rag_viewer_dialog._collections_combo: # type: ignore
+                combo = self._rag_viewer_dialog._collections_combo # type: ignore
                 current_selected_id = combo.itemData(combo.currentIndex()) if combo.currentIndex() >=0 else None
                 if current_selected_id != target_collection_id:
                     for i in range(combo.count()):
@@ -680,7 +712,7 @@ class MainWindow(QMainWindow):
     def _on_rag_viewer_dialog_closed(self, result: int):
         logger.debug(f"RAGViewerDialog closed with result: {result}")
         if self.left_panel:
-            self.left_panel.update_rag_button_state()
+            self.left_panel.update_rag_button_state() # type: ignore
 
     @pyqtSlot()
     async def _handle_upload_files_to_active_project_rag(self):
@@ -714,7 +746,7 @@ class MainWindow(QMainWindow):
                 for i, file_path in enumerate(file_paths):
                     if progress_dialog.wasCanceled(): break
                     progress_dialog.setLabelText(f"Processing: {os.path.basename(file_path)} ({i+1}/{len(file_paths)})")
-                    added, msg = await rag_service.add_file_to_rag(file_path, project_id=active_project_id)
+                    added, msg = await rag_service.add_file_to_rag(file_path, project_id=active_project_id) # type: ignore
                     if added: success_count += 1
                     else: failure_count += 1; error_msgs.append(f"{os.path.basename(file_path)}: {msg}")
                     progress_dialog.setValue(i + 1); QApplication.processEvents()
@@ -724,7 +756,7 @@ class MainWindow(QMainWindow):
                 self.update_status(summary, "#98c379" if failure_count == 0 else "#e5c07b", True, 4000)
                 if failure_count > 0:
                     QMessageBox.warning(self, "RAG File Add Issues", f"{summary}\nErrors:\n" + "\n".join(error_msgs[:5]))
-                if self.left_panel: self.left_panel.update_rag_button_state()
+                if self.left_panel: self.left_panel.update_rag_button_state() # type: ignore
 
 
     @pyqtSlot()
@@ -749,7 +781,7 @@ class MainWindow(QMainWindow):
             prog_msg.setWindowModality(Qt.WindowModality.ApplicationModal); prog_msg.show(); QApplication.processEvents()
 
             try:
-                success_count, failure_count, error_msgs = await rag_service.add_folder_to_rag(folder_path, project_id=active_project_id)
+                success_count, failure_count, error_msgs = await rag_service.add_folder_to_rag(folder_path, project_id=active_project_id) # type: ignore
             finally:
                 prog_msg.close(); QApplication.restoreOverrideCursor(); self.setEnabled(True)
 
@@ -757,4 +789,5 @@ class MainWindow(QMainWindow):
             self.update_status(summary, "#98c379" if failure_count == 0 else "#e5c07b", True, 4000)
             if failure_count > 0:
                 QMessageBox.warning(self, "RAG Folder Add Issues", f"{summary}\nErrors/Skipped:\n" + "\n".join(error_msgs[:5]))
-            if self.left_panel: self.left_panel.update_rag_button_state()
+            if self.left_panel: self.left_panel.update_rag_button_state() # type: ignore
+

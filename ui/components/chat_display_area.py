@@ -8,53 +8,24 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QModelIndex, QPoint, pyqtSignal
 from PyQt6.QtGui import QAction
 
 from utils import constants
+from .chat_list_model import ChatListModel, ChatMessageRole, LoadingStatusRole
+from core.models import ChatMessage
+from .chat_item_delegate import ChatItemDelegate
+from core.message_enums import MessageLoadingState
 
 logger = logging.getLogger(constants.APP_NAME)
 
-try:
-    from .chat_list_model import ChatListModel, ChatMessageRole, LoadingStatusRole, ChatMessage
-    from .chat_item_delegate import ChatItemDelegate
-    from core.message_enums import MessageLoadingState
-except ImportError:
-    logger.critical(
-        "ChatDisplayArea: Failed to import ChatListModel, ChatItemDelegate or MessageLoadingState. Using placeholders.")
-    ChatMessage = dict
-
-
-    class MessageLoadingState:
-        IDLE = 0; LOADING = 1; COMPLETED = 2; ERROR = 3
-
-
-    ChatListModel = type("ChatListModel", (QObject,), {
-        "rowCount": lambda self, parent=None: 0,
-        "data": lambda self, index, role=None: None,
-        "addMessage": lambda self, msg: None,
-        "loadHistory": lambda self, hist: None,
-        "clearMessages": lambda self: None,
-        "appendChunkToLastMessage": lambda self, chunk: None,
-        "finalizeLastMessage": lambda self: None,
-        "updateMessage": lambda self, idx, msg: None,
-        "update_message_loading_state_by_id": lambda self, mid, state: None,
-        "find_message_row_by_id": lambda self, mid: None,
-        "getMessage": lambda self, row: None,
-        "modelReset": pyqtSignal()
-    })
-    ChatItemDelegate = type("ChatItemDelegate", (QObject,),
-                            {"clearCache": lambda self: None, "setView": lambda self, view: None})
-    ChatMessageRole = Qt.ItemDataRole.UserRole + 1
-    LoadingStatusRole = Qt.ItemDataRole.UserRole + 2
-
 
 class ChatDisplayArea(QWidget):
-    text_copied_to_clipboard = pyqtSignal(str, str)  # message, color_hex
+    text_copied_to_clipboard = pyqtSignal(str, str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("ChatDisplayAreaWidget")
 
-        self.list_view: Optional[QListView] = None
-        self.model: Optional[ChatListModel] = None
-        self.delegate: Optional[ChatItemDelegate] = None
+        self.list_view = None
+        self.model = None
+        self.delegate = None
 
         self._init_ui()
         self._connect_internal_signals()
@@ -122,6 +93,7 @@ class ChatDisplayArea(QWidget):
                 if v_scrollbar and v_scrollbar.value() >= v_scrollbar.maximum() - (v_scrollbar.pageStep() // 2):
                     self._scroll_to_bottom()
 
+
     def finalize_stream_in_model(self) -> None:
         if self.model:
             self.model.finalizeLastMessage()
@@ -138,7 +110,7 @@ class ChatDisplayArea(QWidget):
         if self.model and self.model.rowCount() > 0:
             last_msg = self.model.getMessage(self.model.rowCount() - 1)
             if last_msg:
-                return last_msg.content  # Assuming ChatMessage has a simple 'content' property
+                return last_msg.content
         return None
 
     @pyqtSlot(QPoint)
@@ -163,9 +135,9 @@ class ChatDisplayArea(QWidget):
             clipboard = QApplication.clipboard()
             if clipboard:
                 clipboard.setText(text)
-                self.text_copied_to_clipboard.emit("Message text copied!", "#98c379")  # Green
+                self.text_copied_to_clipboard.emit("Message text copied!", "#98c379")
             else:
-                self.text_copied_to_clipboard.emit("Error: Clipboard not accessible.", "#e06c75")  # Red
+                self.text_copied_to_clipboard.emit("Error: Clipboard not accessible.", "#e06c75")
         except Exception as e:
             logger.exception(f"Error copying text to clipboard: {e}")
             self.text_copied_to_clipboard.emit(f"Copy Error: {e}", "#e06c75")

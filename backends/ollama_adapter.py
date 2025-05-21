@@ -2,39 +2,27 @@ import asyncio
 import logging
 from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
 
-try:
-    import ollama
-
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    ollama = None
-    OLLAMA_AVAILABLE = False
+import ollama
 
 from .base_adapter import LLMAdapterInterface, ChatMessage
 
 logger = logging.getLogger(__name__)
 
-
 class OllamaAdapter(LLMAdapterInterface):
 
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
-        self.client: Optional[ollama.AsyncClient] = None
-        self.current_model_id: Optional[str] = None
-        self.host: Optional[str] = None
-        self.system_prompt: Optional[str] = None
-        self._is_configured: bool = False
-        self._last_error: Optional[str] = None
-        self._comms_logger: Optional[Any] = None
-        self._prompt_tokens: int = 0
-        self._completion_tokens: int = 0
+        self.client = None
+        self.current_model_id = None
+        self.host = None
+        self.system_prompt = None
+        self._is_configured = False
+        self._last_error = None
+        self._comms_logger = None
+        self._prompt_tokens = 0
+        self._completion_tokens = 0
 
         if settings:
             self.host = settings.get("ollama_host")
-
-        if not OLLAMA_AVAILABLE:
-            self._last_error = "Ollama library not found. Please install it: pip install ollama"
-            logger.critical(self._last_error)
-            return
 
         try:
             self.client = ollama.AsyncClient(host=self.host)
@@ -53,14 +41,11 @@ class OllamaAdapter(LLMAdapterInterface):
 
         if not self.client:
             self._last_error = "Ollama client not initialized."
-            if OLLAMA_AVAILABLE:
-                try:
-                    self.client = ollama.AsyncClient(host=self.host)
-                except Exception as e:
-                    self._last_error = f"Failed to re-initialize Ollama client during configure: {e}"
-                    logger.error(self._last_error)
-                    return False, self._last_error
-            else:
+            try:
+                self.client = ollama.AsyncClient(host=self.host)
+            except Exception as e:
+                self._last_error = f"Failed to re-initialize Ollama client during configure: {e}"
+                logger.error(self._last_error)
                 return False, self._last_error
 
         if not model_id:
@@ -114,10 +99,21 @@ class OllamaAdapter(LLMAdapterInterface):
         for msg in messages:
             msg_dict = {'role': msg.role, 'content': msg.content}
             if msg.image_data and self.supports_images():
-                msg_dict['images'] = [img_item.get("data") for img_item in msg.image_data if img_item.get("data")]
+                images_bytes_list = []
+                for img_item in msg.image_data:
+                    base64_data = img_item.get("data")
+                    if base64_data:
+                        try:
+                            import base64
+                            img_bytes = base64.b64decode(base64_data)
+                            images_bytes_list.append(img_bytes)
+                        except Exception as e_b64:
+                            logger.error(f"OllamaAdapter: Failed to decode base64 image for message: {e_b64}")
+                if images_bytes_list:
+                    msg_dict['images'] = images_bytes_list
             api_messages.append(msg_dict)
 
-        options: Dict[str, Any] = {"temperature": temperature}
+        options = {"temperature": temperature}
         if max_tokens is not None:
             options["num_predict"] = max_tokens
         if top_p is not None:
@@ -128,7 +124,7 @@ class OllamaAdapter(LLMAdapterInterface):
         if self._comms_logger:
             log_msg_prompt = f"Ollama Request to '{self.current_model_id}': Messages: {len(api_messages)}, Options: {options}"
             self._comms_logger.log(log_msg_prompt, source="OllamaAdapter")
-            # Consider logging full prompt if verbosity allows and PII is handled
+
 
         try:
             stream_response = await self.client.chat(
@@ -151,7 +147,7 @@ class OllamaAdapter(LLMAdapterInterface):
                     yield chunk_text, None
 
                 if part.get('done'):
-                    if 'total_duration' in part:  # Present in final 'done' message
+                    if 'total_duration' in part:
                         logger.info(f"Ollama stream finished. Total duration: {part.get('total_duration')}")
                         self._prompt_tokens = part.get('prompt_eval_count', 0)
                         self._completion_tokens = part.get('eval_count', 0)
@@ -180,7 +176,7 @@ class OllamaAdapter(LLMAdapterInterface):
     ) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
 
         full_response_text = ""
-        final_error_message: Optional[str] = None
+        final_error_message = None
 
         async for chunk, error_message in self.get_response_stream(
                 messages, temperature, max_tokens, top_p, stop_sequences):
@@ -197,15 +193,13 @@ class OllamaAdapter(LLMAdapterInterface):
     async def list_available_models(self, api_key: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         if not self.client:
             self._last_error = "Ollama client not initialized. Cannot list models."
-            if OLLAMA_AVAILABLE:
-                try:
-                    self.client = ollama.AsyncClient(host=self.host)
-                except Exception as e_init:
-                    self._last_error = f"Failed to re-initialize Ollama client during list_models: {e_init}"
-                    logger.error(self._last_error)
-                    return [], self._last_error
-            else:
+            try:
+                self.client = ollama.AsyncClient(host=self.host)
+            except Exception as e_init:
+                self._last_error = f"Failed to re-initialize Ollama client during list_models: {e_init}"
+                logger.error(self._last_error)
                 return [], self._last_error
+
 
         self._last_error = None
         try:
@@ -246,7 +240,7 @@ class OllamaAdapter(LLMAdapterInterface):
     def supports_images(self) -> bool:
         if self.current_model_id:
             return "llava" in self.current_model_id.lower() or \
-                "bakllava" in self.current_model_id.lower()  # Add other multimodal models
+                "bakllava" in self.current_model_id.lower()
         return False
 
     def set_comms_logger(self, comms_logger: Any) -> None:
