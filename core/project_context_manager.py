@@ -5,8 +5,8 @@ from typing import List, Dict, Optional, Any
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from .models import ChatMessage
 from utils import constants  # <-- IMPORT ADDED
+from .models import ChatMessage
 
 logger = logging.getLogger(__name__)
 

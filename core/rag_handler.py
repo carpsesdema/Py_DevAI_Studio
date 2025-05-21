@@ -3,9 +3,9 @@
 # UPDATED - Implemented boosting for chunks from focused files during re-ranking.
 
 import logging
+import os  # Added for path normalization
 import re
-import os # Added for path normalization
-from typing import List, Optional, Dict, Any, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 # Assuming services are in the parent directory 'services' relative to 'core'
 # Adjust import paths if your structure differs
@@ -19,10 +19,11 @@ except ImportError as e:
     UploadService = type("UploadService", (object,), {})
     VectorDBService = type("VectorDBService", (object,), {})
     GLOBAL_COLLECTION_ID = "global_collection"
-    constants = type("constants", (object,), {"RAG_NUM_RESULTS": 5, "RAG_CHUNK_SIZE": 1000, "RAG_CHUNK_OVERLAP": 150}) # Dummy constants
-
+    constants = type("constants", (object,),
+                     {"RAG_NUM_RESULTS": 5, "RAG_CHUNK_SIZE": 1000, "RAG_CHUNK_OVERLAP": 150})  # Dummy constants
 
 logger = logging.getLogger(__name__)
+
 
 class RagHandler:
     """
@@ -30,7 +31,7 @@ class RagHandler:
     querying, re-ranking (considering focus paths), and formatting context.
     """
 
-    _TECHNICAL_KEYWORDS = { # Keywords indicating RAG might be useful
+    _TECHNICAL_KEYWORDS = {  # Keywords indicating RAG might be useful
         'python', 'code', 'error', 'fix', 'implement', 'explain', 'how to',
         'def ', 'class ', 'import ', ' module', ' function', ' method',
         ' attribute', ' bug', ' issue', ' traceback', ' install', ' pip',
@@ -46,15 +47,15 @@ class RagHandler:
         'summarize this', 'search', 'find', 'lookup', 'relevant context',
         'change', 'update', 'modify',
     }
-    _GREETING_PATTERNS = re.compile(r"^\s*(hi|hello|hey|yo|sup|good\s+(morning|afternoon|evening)|how\s+are\s+you)\b.*", re.IGNORECASE)
+    _GREETING_PATTERNS = re.compile(r"^\s*(hi|hello|hey|yo|sup|good\s+(morning|afternoon|evening)|how\s+are\s+you)\b.*",
+                                    re.IGNORECASE)
     _CODE_FENCE_PATTERN = re.compile(r"```")
-
 
     def __init__(self, upload_service: UploadService, vector_db_service: VectorDBService):
         if not isinstance(upload_service, UploadService):
             raise TypeError("RagHandler requires a valid UploadService instance.")
         if not isinstance(vector_db_service, VectorDBService):
-             raise TypeError("RagHandler requires a valid VectorDBService instance.")
+            raise TypeError("RagHandler requires a valid VectorDBService instance.")
 
         self._upload_service = upload_service
         self._vector_db_service = vector_db_service
@@ -85,8 +86,8 @@ class RagHandler:
         entities = set()
         if not query:
             return entities
-        call_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(' # Function calls
-        def_class_pattern = r'\b(?:def|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)' # Definitions
+        call_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\('  # Function calls
+        def_class_pattern = r'\b(?:def|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)'  # Definitions
         try:
             for match in re.finditer(call_pattern, query): entities.add(match.group(1))
             for match in re.finditer(def_class_pattern, query): entities.add(match.group(1))
@@ -99,12 +100,12 @@ class RagHandler:
         return entities
 
     def get_formatted_context(
-        self,
-        query: str,
-        query_entities: Set[str],
-        project_id: Optional[str],
-        focus_paths: Optional[List[str]] = None, # MODIFIED: Added focus_paths parameter
-        is_modification_request: bool = False
+            self,
+            query: str,
+            query_entities: Set[str],
+            project_id: Optional[str],
+            focus_paths: Optional[List[str]] = None,  # MODIFIED: Added focus_paths parameter
+            is_modification_request: bool = False
     ) -> Tuple[str, List[str]]:
         """
         Retrieves, re-ranks (considering focus paths), and formats RAG context.
@@ -134,16 +135,16 @@ class RagHandler:
                 logger.info(f"Normalized focus paths for RAG: {normalized_focus_paths}")
             except Exception as e_norm:
                 logger.error(f"Error normalizing focus paths {focus_paths}: {e_norm}")
-                normalized_focus_paths = set() # Clear on error
+                normalized_focus_paths = set()  # Clear on error
 
         # Determine collections to query
         collections_to_query = []
         if self._vector_db_service.is_ready(GLOBAL_COLLECTION_ID):
-             collections_to_query.append(GLOBAL_COLLECTION_ID)
+            collections_to_query.append(GLOBAL_COLLECTION_ID)
         if project_id and project_id != GLOBAL_COLLECTION_ID and self._vector_db_service.is_ready(project_id):
-             collections_to_query.append(project_id)
+            collections_to_query.append(project_id)
         elif project_id and project_id != GLOBAL_COLLECTION_ID:
-             logger.warning(f"Project collection '{project_id}' not ready, skipping.")
+            logger.warning(f"Project collection '{project_id}' not ready, skipping.")
 
         if not collections_to_query:
             logger.warning("RAG context requested but no ready collections to query.")
@@ -163,19 +164,21 @@ class RagHandler:
                 collection_ids=collections_to_query,
                 n_results=num_initial_results
             )
-            queried_collections = list(set(c.get("metadata", {}).get("collection_id", "N/A") for c in relevant_chunks if c.get("metadata", {}).get("collection_id") != "N/A"))
+            queried_collections = list(set(c.get("metadata", {}).get("collection_id", "N/A") for c in relevant_chunks if
+                                           c.get("metadata", {}).get("collection_id") != "N/A"))
 
             # 2. Re-ranking based on code entities AND focus paths
-            entity_boost_factor = 0.80 # Boost for matching code entities
-            focus_boost_factor = 0.60 # Stronger boost for being in a focused file
+            entity_boost_factor = 0.80  # Boost for matching code entities
+            focus_boost_factor = 0.60  # Stronger boost for being in a focused file
             boosted_by_entity_count = 0
             boosted_by_focus_count = 0
 
             if relevant_chunks:
-                logger.debug(f"Re-ranking {len(relevant_chunks)} chunks. Entities: {query_entities}, Focus Paths: {normalized_focus_paths}")
+                logger.debug(
+                    f"Re-ranking {len(relevant_chunks)} chunks. Entities: {query_entities}, Focus Paths: {normalized_focus_paths}")
                 for chunk in relevant_chunks:
                     metadata = chunk.get('metadata')
-                    distance = chunk.get('distance') # Original semantic distance
+                    distance = chunk.get('distance')  # Original semantic distance
 
                     if not isinstance(metadata, dict) or not isinstance(distance, (int, float)):
                         logger.warning(f"Skipping chunk with invalid metadata or distance: {chunk}")
@@ -184,7 +187,7 @@ class RagHandler:
                     boost_applied = False
 
                     # --- Apply Focus Boost (Highest Priority) ---
-                    chunk_source_path = metadata.get('source') # 'source' should hold the full path
+                    chunk_source_path = metadata.get('source')  # 'source' should hold the full path
                     if normalized_focus_paths and chunk_source_path:
                         try:
                             # Normalize the chunk's source path for comparison
@@ -194,39 +197,38 @@ class RagHandler:
                             is_focused = False
                             for focus_path in normalized_focus_paths:
                                 if os.path.isdir(focus_path):
-                                     # Check if chunk path starts with the directory path
-                                     if norm_chunk_path.startswith(focus_path + os.sep):
-                                         is_focused = True
-                                         break
-                                elif norm_chunk_path == focus_path: # Direct file match
-                                     is_focused = True
-                                     break
+                                    # Check if chunk path starts with the directory path
+                                    if norm_chunk_path.startswith(focus_path + os.sep):
+                                        is_focused = True
+                                        break
+                                elif norm_chunk_path == focus_path:  # Direct file match
+                                    is_focused = True
+                                    break
 
                             if is_focused:
-                                chunk['distance'] *= focus_boost_factor # Apply focus boost
-                                chunk['boost_reason'] = 'focus' # Add reason for debugging
+                                chunk['distance'] *= focus_boost_factor  # Apply focus boost
+                                chunk['boost_reason'] = 'focus'  # Add reason for debugging
                                 boosted_by_focus_count += 1
                                 boost_applied = True
                                 # logger.debug(f"  Applied FOCUS boost to chunk from '{chunk_source_path}'. New dist: {chunk['distance']:.4f}")
 
                         except Exception as e_focus_boost:
-                             logger.error(f"Error applying focus boost for chunk path '{chunk_source_path}': {e_focus_boost}")
-
+                            logger.error(
+                                f"Error applying focus boost for chunk path '{chunk_source_path}': {e_focus_boost}")
 
                     # --- Apply Entity Boost (Lower Priority - only if not already focus-boosted) ---
                     if not boost_applied and query_entities and 'code_entities' in metadata:
-                        chunk_entities = set(metadata.get('code_entities', [])) # Ensure it's a list/set
+                        chunk_entities = set(metadata.get('code_entities', []))  # Ensure it's a list/set
                         if not query_entities.isdisjoint(chunk_entities):
-                            chunk['distance'] *= entity_boost_factor # Apply entity boost
-                            chunk['boost_reason'] = 'entity' # Add reason for debugging
+                            chunk['distance'] *= entity_boost_factor  # Apply entity boost
+                            chunk['boost_reason'] = 'entity'  # Add reason for debugging
                             boosted_by_entity_count += 1
                             boost_applied = True
                             # logger.debug(f"  Applied ENTITY boost to chunk from '{chunk_source_path}'. New dist: {chunk['distance']:.4f}")
 
-
                 if boosted_by_focus_count > 0 or boosted_by_entity_count > 0:
-                    logger.info(f"Applied RAG boost: Focus={boosted_by_focus_count}, Entity={boosted_by_entity_count} chunks.")
-
+                    logger.info(
+                        f"Applied RAG boost: Focus={boosted_by_focus_count}, Entity={boosted_by_entity_count} chunks.")
 
             # 3. Sort and select final results based on potentially modified distances
             if relevant_chunks:
@@ -240,11 +242,11 @@ class RagHandler:
                 retrieved_chunks_details = []
                 for i, chunk in enumerate(final_results):
                     metadata = chunk.get("metadata", {})
-                    filename = metadata.get("filename", "unknown_source") # Use filename for display
+                    filename = metadata.get("filename", "unknown_source")  # Use filename for display
                     collection_id = metadata.get("collection_id", "N/A")
-                    code_content = metadata.get("content", "[Content Missing]") # Get content from metadata
+                    code_content = metadata.get("content", "[Content Missing]")  # Get content from metadata
                     distance = chunk.get('distance', -1.0)
-                    boost_reason = chunk.get('boost_reason') # Get boost reason if applied
+                    boost_reason = chunk.get('boost_reason')  # Get boost reason if applied
 
                     # Optional debug info
                     debug_info = f"(Dist: {distance:.4f}"
@@ -254,12 +256,15 @@ class RagHandler:
                         if matches: debug_info += f", Matches: {', '.join(matches)}"
                     debug_info += ")"
 
-                    context_parts.append(f"--- Snippet {i+1} from `{filename}` (Collection: {collection_id}) {debug_info} ---\n```python\n{code_content}\n```\n")
+                    context_parts.append(
+                        f"--- Snippet {i + 1} from `{filename}` (Collection: {collection_id}) {debug_info} ---\n```python\n{code_content}\n```\n")
                     retrieved_chunks_details.append(f"{filename} {debug_info}")
 
                 if context_parts:
-                    context_str = ("--- Relevant Code Context Start ---\n" + "\n".join(context_parts) + "--- Relevant Code Context End ---")
-                    logger.info(f"Final RAG context includes {len(final_results)} chunks: [{', '.join(retrieved_chunks_details)}]")
+                    context_str = ("--- Relevant Code Context Start ---\n" + "\n".join(
+                        context_parts) + "--- Relevant Code Context End ---")
+                    logger.info(
+                        f"Final RAG context includes {len(final_results)} chunks: [{', '.join(retrieved_chunks_details)}]")
                 else:
                     logger.info("No valid chunks remained after processing/sorting.")
             else:

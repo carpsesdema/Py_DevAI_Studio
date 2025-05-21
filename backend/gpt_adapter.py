@@ -1,12 +1,12 @@
 # === backend/gpt_adapter.py ===
-import logging
 import asyncio
+import logging
 import os
 from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
 
+from core.models import ChatMessage, MODEL_ROLE, USER_ROLE, SYSTEM_ROLE  # Added SYSTEM_ROLE
 # Import interface and model
 from .interface import BackendInterface
-from core.models import ChatMessage, MODEL_ROLE, USER_ROLE, SYSTEM_ROLE  # Added SYSTEM_ROLE
 
 # Attempt import for type hinting and error checking for the OpenAI library
 try:
@@ -117,7 +117,7 @@ class GPTAdapter(BackendInterface):
         return self._last_error
 
     async def get_response_stream(self, history: List[ChatMessage], options: Optional[Dict[str, Any]] = None) -> \
-    AsyncGenerator[str, None]:
+            AsyncGenerator[str, None]:
         logger.info(
             f"GPTAdapter: Generating stream. Model: {self._model_name}, History items: {len(history)}, Options: {options}")
         self._last_error = None

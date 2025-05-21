@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 

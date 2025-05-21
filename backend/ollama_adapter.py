@@ -1,9 +1,9 @@
 # SynChat/backend/ollama_adapter.py
-import logging
 import asyncio
 import base64
-from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
+import logging
 import time
+from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
 
 try:
     import ollama

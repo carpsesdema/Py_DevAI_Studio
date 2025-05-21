@@ -1,14 +1,12 @@
 import logging
 import os
-from typing import List, Optional, Dict, Any, Tuple, Set, Union, NamedTuple, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Tuple, Union, NamedTuple, TYPE_CHECKING
 
 from core.models import ChatMessage, USER_ROLE
 
 if TYPE_CHECKING:
     from core.rag_handler import RagHandler
     from core.modification_handler import ModificationHandler
-
-from utils import constants
 
 logger = logging.getLogger(__name__)
 

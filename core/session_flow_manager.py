@@ -5,10 +5,9 @@ from typing import List, Optional, Dict, Any, Tuple
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from services.session_service import SessionService
+from core.backend_coordinator import BackendCoordinator  # Not directly used here, but good for context
 from core.project_context_manager import ProjectContextManager
-from core.backend_coordinator import BackendCoordinator # Not directly used here, but good for context
-from core.models import ChatMessage # For type hinting if any methods were to handle ChatMessage lists directly
+from services.session_service import SessionService
 from utils import constants
 
 logger = logging.getLogger(__name__)
@@ -26,16 +25,17 @@ class SessionFlowManager(QObject):
     def __init__(self,
                  session_service: SessionService,
                  project_context_manager: ProjectContextManager,
-                 backend_coordinator: BackendCoordinator, # Added for completeness, though not directly used
+                 backend_coordinator: BackendCoordinator,  # Added for completeness, though not directly used
                  parent: Optional[QObject] = None):
         super().__init__(parent)
-        if not all([session_service, project_context_manager, backend_coordinator]): # Added backend_coordinator to check
+        if not all(
+                [session_service, project_context_manager, backend_coordinator]):  # Added backend_coordinator to check
             err_msg = "SessionFlowManager requires SessionService, ProjectContextManager, and BackendCoordinator."
             logger.critical(err_msg)
             raise ValueError(err_msg)
         self._session_service = session_service
         self._project_context_manager = project_context_manager
-        self._backend_coordinator = backend_coordinator # Store it
+        self._backend_coordinator = backend_coordinator  # Store it
         self._current_session_filepath: Optional[str] = None
         logger.info("SessionFlowManager initialized.")
 
@@ -46,7 +46,8 @@ class SessionFlowManager(QObject):
         self._current_session_filepath = filepath
 
     def load_last_session_state_on_startup(self) -> Tuple[
-        Optional[str], Optional[str], Optional[Dict[str, Any]], str, Optional[str], Optional[float], Optional[str] # Added Generator Model
+        Optional[str], Optional[str], Optional[Dict[str, Any]], str, Optional[str], Optional[float], Optional[str]
+        # Added Generator Model
     ]:
         """
         Loads state from the last session file specifically for application startup.
@@ -58,7 +59,7 @@ class SessionFlowManager(QObject):
         active_project_id_from_session = constants.GLOBAL_COLLECTION_ID
         active_chat_backend_id = None
         chat_temperature = None
-        generator_model_name = None # <-- NEW
+        generator_model_name = None  # <-- NEW
 
         try:
             # SessionService.get_last_session() now returns (model, pers, project_data, session_extra_data)
@@ -74,20 +75,21 @@ class SessionFlowManager(QObject):
                         chat_temperature = float(chat_temperature)
                     except (ValueError, TypeError):
                         chat_temperature = None
-                generator_model_name = session_extra_data.get("generator_model_name") # <-- GET NEW
+                generator_model_name = session_extra_data.get("generator_model_name")  # <-- GET NEW
 
             logger.info(
                 f"SFM: Last session loaded. Model: {model}, Pers: {'Set' if personality else 'None'}, "
                 f"ActivePID: {active_project_id_from_session}, ActiveChatBackend: {active_chat_backend_id}, "
                 f"Temp: {chat_temperature}, GeneratorModel: {generator_model_name}"
             )
-            return model, personality, project_data, active_project_id_from_session, active_chat_backend_id, chat_temperature, generator_model_name # <-- RETURN NEW
+            return model, personality, project_data, active_project_id_from_session, active_chat_backend_id, chat_temperature, generator_model_name  # <-- RETURN NEW
         except Exception as e:
             logger.exception("SFM: Error loading last session state:")
-            return None, None, None, constants.GLOBAL_COLLECTION_ID, None, None, None # <-- RETURN NEW (None)
+            return None, None, None, constants.GLOBAL_COLLECTION_ID, None, None, None  # <-- RETURN NEW (None)
 
     def start_new_chat_session(self, current_chat_model: str, current_chat_personality: Optional[str],
-                               current_session_extra_data: Dict[str, Any]): # current_session_extra_data will include generator_model
+                               current_session_extra_data: Dict[
+                                   str, Any]):  # current_session_extra_data will include generator_model
         logger.info("SFM: Starting new chat session flow...")
         self.active_history_cleared.emit()
         self._current_session_filepath = None
@@ -119,12 +121,12 @@ class SessionFlowManager(QObject):
         if session_extra_data:
             project_context_data["session_extra_data_on_load"] = session_extra_data
 
-        chat_model_to_set = loaded_model or constants.DEFAULT_GEMINI_CHAT_MODEL # Default for chat model
+        chat_model_to_set = loaded_model or constants.DEFAULT_GEMINI_CHAT_MODEL  # Default for chat model
         self.session_loaded.emit(chat_model_to_set, loaded_pers, project_context_data, active_project_id_from_load)
         self.status_update_requested.emit(f"Session '{os.path.basename(filepath)}' loaded.", "#98c379", True, 3000)
 
     def save_session_as(self, filepath: str, current_chat_model: str, current_chat_personality: Optional[str],
-                        session_extra_data: Dict[str, Any]) -> bool: # session_extra_data comes from CM with gen model
+                        session_extra_data: Dict[str, Any]) -> bool:  # session_extra_data comes from CM with gen model
         logger.info(f"SFM: Saving session as: {filepath}")
         if not self._project_context_manager:
             self.error_occurred.emit("Cannot save session: ProjectContextManager not available.", True)

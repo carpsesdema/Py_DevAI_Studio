@@ -1,9 +1,9 @@
 # core/project_summary_coordinator.py
 import logging
 import uuid
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 try:
     from services.project_intelligence_service import ProjectIntelligenceService

@@ -1,14 +1,14 @@
 # main.py
-import sys
-import os
-import traceback
-import logging
 import asyncio
+import logging
+import os
+import sys
+import traceback
 from typing import Optional
 
-from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFontDatabase, QIcon # QKeyEvent, QKeySequence (if you re-add shortcuts)
+from PyQt6.QtGui import QIcon  # QKeyEvent, QKeySequence (if you re-add shortcuts)
+from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle
 
 try:
     import qasync
@@ -85,7 +85,7 @@ async def async_main():
     logger.info("--- Instantiating Application Components ---")
     main_window: Optional[MainWindow] = None
     chat_message_state_handler: Optional[ChatMessageStateHandler] = None
-    chat_manager: Optional[ChatManager] = None # Ensure chat_manager is defined in this scope
+    chat_manager: Optional[ChatManager] = None  # Ensure chat_manager is defined in this scope
 
     try:
         session_service = SessionService()
@@ -110,14 +110,13 @@ async def async_main():
                         chat_display_area.chat_item_delegate.setView(chat_display_area.chat_list_view)
                         logger.info("Set view reference for initial active tab's delegate.")
 
-
             if chat_list_model_instance:
                 backend_coordinator_instance = chat_manager.get_backend_coordinator()
                 if backend_coordinator_instance:
                     chat_message_state_handler = ChatMessageStateHandler(
                         model=chat_list_model_instance,
                         backend_coordinator=backend_coordinator_instance,
-                        parent=app # Parent to app for lifecycle management
+                        parent=app  # Parent to app for lifecycle management
                     )
                     logger.info("ChatMessageStateHandler instantiated and wired to initial active model.")
                 else:
@@ -203,13 +202,15 @@ if __name__ == "__main__":
             logger.critical(f"RuntimeError during qasync execution: {e}", exc_info=True)
             try:
                 QMessageBox.critical(None, "Runtime Error", f"Application failed to run:\n{e}\n\nCheck logs.")
-            except Exception: pass
+            except Exception:
+                pass
             exit_code = 1
     except Exception as e:
         logger.critical(f"Unhandled exception during application startup/run: {e}", exc_info=True)
         try:
             QMessageBox.critical(None, "Unhandled Exception", f"An unexpected error occurred:\n{e}\n\nCheck logs.")
-        except Exception: pass
+        except Exception:
+            pass
         exit_code = 1
     finally:
         logger.info(f"Application attempting to exit with code: {exit_code}")

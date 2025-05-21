@@ -1,9 +1,9 @@
 # Syn_LLM/utils/syntax_highlighter.py
 # UPDATED FILE - Use document's font for style creation
 
-import sys
 from PyQt6.QtCore import QRegularExpression
 from PyQt6.QtGui import QColor, QTextCharFormat, QFont, QSyntaxHighlighter, QTextDocument
+
 
 # Helper function to create format using base font properties
 def format_text(base_font: QFont, color_name, style=''):
@@ -12,7 +12,7 @@ def format_text(base_font: QFont, color_name, style=''):
     _color.setNamedColor(color_name)
 
     _format = QTextCharFormat()
-    _format.setFont(base_font) # Start with base font
+    _format.setFont(base_font)  # Start with base font
     _format.setForeground(_color)
 
     # Apply weight/italic modifications
@@ -29,24 +29,24 @@ def format_text(base_font: QFont, color_name, style=''):
     # else: Keep base font italic state
     #    _format.setFontItalic(is_italic) # Explicitly set base italic if needed
 
-
     return _format
+
 
 # Define styles using the helper function - UPDATED FOR DARK THEME
 # Colors inspired by typical dark IDE themes (like VS Code Dark+)
 # NOTE: Styles are now generated dynamically based on the document's font
 #       in the __init__ method. This dictionary serves as color/style definitions.
 STYLE_DEFINITIONS = {
-    'keyword': ('#569cd6', ''),        # Blue for keywords
-    'operator': ('#d4d4d4', ''),       # Default text color for operators
-    'brace': ('#d4d4d4', ''),          # Default text color for braces
-    'defclass': ('#4ec9b0', ''),       # Teal for def/class names
-    'string': ('#ce9178', ''),        # Orange-ish for strings
-    'string2': ('#ce9178', ''),       # Orange-ish for triple-quoted strings
-    'comment': ('#6a9955', 'italic'), # Green italic for comments
-    'self': ('#9cdcfe', ''),           # Light blue for self
-    'numbers': ('#b5cea8', ''),       # Olive-green for numbers
-    'decorator': ('#d7ba7d', ''),      # Yellow-gold for decorators (@)
+    'keyword': ('#569cd6', ''),  # Blue for keywords
+    'operator': ('#d4d4d4', ''),  # Default text color for operators
+    'brace': ('#d4d4d4', ''),  # Default text color for braces
+    'defclass': ('#4ec9b0', ''),  # Teal for def/class names
+    'string': ('#ce9178', ''),  # Orange-ish for strings
+    'string2': ('#ce9178', ''),  # Orange-ish for triple-quoted strings
+    'comment': ('#6a9955', 'italic'),  # Green italic for comments
+    'self': ('#9cdcfe', ''),  # Light blue for self
+    'numbers': ('#b5cea8', ''),  # Olive-green for numbers
+    'decorator': ('#d7ba7d', ''),  # Yellow-gold for decorators (@)
     'function_call': ('#dcdcaa', ''),  # Light yellow for function calls
 }
 
@@ -59,7 +59,7 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         'and', 'assert', 'break', 'class', 'continue', 'def',
         'del', 'elif', 'else', 'except', 'exec', 'finally',
         'for', 'from', 'global', 'if', 'import', 'in',
-        'is', 'lambda', 'not', 'or', 'pass', 'print', # Note: 'print' is keyword in Py2, function in Py3
+        'is', 'lambda', 'not', 'or', 'pass', 'print',  # Note: 'print' is keyword in Py2, function in Py3
         'raise', 'return', 'try', 'while', 'yield',
         'None', 'True', 'False', 'nonlocal', 'with', 'async', 'await'
     ]
@@ -82,27 +82,28 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         r'\{', r'\}', r'\(', r'\)', r'\[', r'\]',
     ]
 
-    def __init__(self, document: QTextDocument): # Expecting the QTextDocument directly
+    def __init__(self, document: QTextDocument):  # Expecting the QTextDocument directly
         """
         Initializes the highlighter.
         Args:
             document: The QTextDocument to apply highlighting to.
         """
         super().__init__(document)
-        self.doc_font = document.defaultFont() # Get the font set on the document
+        self.doc_font = document.defaultFont()  # Get the font set on the document
 
         # --- Generate styles based on document font ---
         self.styles = {key: format_text(self.doc_font, color, style_str)
                        for key, (color, style_str) in STYLE_DEFINITIONS.items()}
         # Ensure all required styles exist
-        required_styles = ['keyword', 'operator', 'brace', 'defclass', 'string', 'string2', 'comment', 'self', 'numbers', 'decorator', 'function_call']
+        required_styles = ['keyword', 'operator', 'brace', 'defclass', 'string', 'string2', 'comment', 'self',
+                           'numbers', 'decorator', 'function_call']
         for req_style in required_styles:
-             if req_style not in self.styles:
-                 # Provide a default format if somehow missing (shouldn't happen with above dict)
-                 self.styles[req_style] = QTextCharFormat()
-                 self.styles[req_style].setFont(self.doc_font)
-                 self.styles[req_style].setForeground(QColor("gray")) # Fallback color
-                 print(f"Warning: Style '{req_style}' missing, using fallback.")
+            if req_style not in self.styles:
+                # Provide a default format if somehow missing (shouldn't happen with above dict)
+                self.styles[req_style] = QTextCharFormat()
+                self.styles[req_style].setFont(self.doc_font)
+                self.styles[req_style].setForeground(QColor("gray"))  # Fallback color
+                print(f"Warning: Style '{req_style}' missing, using fallback.")
 
         # ---------------------------------------------
 
@@ -132,7 +133,7 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
             (r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=\()', 1, self.styles['function_call']),
 
             # 'def' and 'class' followed by name - Use raw string r'...' for \b and \s
-            (r'\b(def|class)\b\s+([A-Za-z_][A-Za-z0-9_]*)', 2, self.styles['defclass']), # Match name after def/class
+            (r'\b(def|class)\b\s+([A-Za-z_][A-Za-z0-9_]*)', 2, self.styles['defclass']),  # Match name after def/class
 
             # Numeric literals - Use raw string r'...' for \b
             (r'\b[+-]?[0-9]+[lL]?\b', 0, self.styles['numbers']),
@@ -151,7 +152,6 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         # Build a QRegularExpression for each pattern
         self.rules = [(QRegularExpression(pat), index, fmt) for (pat, index, fmt) in rules]
 
-
     def highlightBlock(self, text):
         """Apply syntax highlighting to the given block of text."""
         # Do other syntax formatting first
@@ -162,12 +162,12 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
                 # Check if the captured group index 'nth' is valid for this match
                 # The capturedTexts() list includes the full match at index 0.
                 # A specific group index 'nth' refers to capture group 'nth'.
-                capture_index = nth # nth=0 means full match, nth=1 means group 1, etc.
+                capture_index = nth  # nth=0 means full match, nth=1 means group 1, etc.
                 if capture_index < len(match.capturedTexts()):
                     start_index = match.capturedStart(capture_index)
                     length = match.capturedLength(capture_index)
-                    if start_index >= 0 and length > 0: # Ensure valid capture range
-                         self.setFormat(start_index, length, format_style)
+                    if start_index >= 0 and length > 0:  # Ensure valid capture range
+                        self.setFormat(start_index, length, format_style)
 
         self.setCurrentBlockState(0)
 
@@ -176,7 +176,6 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         if not in_multiline:
             in_multiline = self.match_multiline(text, *self.tri_double)
 
-
     def match_multiline(self, text, delimiter, in_state, style):
         """Do highlighting of multi-line strings. ``delimiter`` should be a
         ``QRegularExpression`` for triple-single-quotes or triple-double-quotes, and
@@ -184,21 +183,20 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         ``delimiter``.
         """
         start_index = 0
-        add = 0 # Correction factor if previous state is multi-line
+        add = 0  # Correction factor if previous state is multi-line
 
         # If inside a multi-line string from previous block, highlight from start
         if self.previousBlockState() == in_state:
             start_index = 0
             add = 0
-            self.setCurrentBlockState(in_state) # Assume it continues unless delimiter is found
+            self.setCurrentBlockState(in_state)  # Assume it continues unless delimiter is found
         else:
             # Look for the start of a multi-line string in the current block
             start_match = delimiter.match(text)
             if not start_match.hasMatch():
-                 return False # No start found
+                return False  # No start found
             start_index = start_match.capturedStart()
             add = start_match.capturedLength()
-
 
         # Now look for the end delimiter from the potential start position
         end_match = delimiter.match(text, start_index + add)
@@ -206,11 +204,11 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
             # End delimiter found in this block
             end_index = end_match.capturedStart()
             length = (end_index - start_index) + end_match.capturedLength()
-            self.setCurrentBlockState(0) # Multi-line ends here
+            self.setCurrentBlockState(0)  # Multi-line ends here
         else:
             # End delimiter not found, highlight to end of block
             self.setCurrentBlockState(in_state)
             length = len(text) - start_index
 
         self.setFormat(start_index, length, style)
-        return True # Multi-line string handled
+        return True  # Multi-line string handled

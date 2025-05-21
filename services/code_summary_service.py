@@ -1,7 +1,7 @@
 # services/code_summary_service.py
 import logging
-import uuid # <--- ADDED IMPORT
-from typing import Optional, Dict, List
+import uuid  # <--- ADDED IMPORT
+from typing import Dict, List
 
 # Assuming ChatMessage and BackendCoordinator are accessible for type hinting
 # Adjust paths if necessary based on your project structure
@@ -11,35 +11,35 @@ try:
 except ImportError as e:
     logging.critical(f"CodeSummaryService: Failed to import core components: {e}")
     # Define fallback types for type hinting if imports fail
-    ChatMessage = type("ChatMessage", (object,), {}) # type: ignore
-    USER_ROLE = "user" # type: ignore
-    BackendCoordinator = type("BackendCoordinator", (object,), {}) # type: ignore
-
+    ChatMessage = type("ChatMessage", (object,), {})  # type: ignore
+    USER_ROLE = "user"  # type: ignore
+    BackendCoordinator = type("BackendCoordinator", (object,), {})  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 # --- PROMPT TEMPLATE FOR CODE SUMMARY ---
 # This is the same template previously in ChatManager
 PLANNER_PROMPT_TEMPLATE_FOR_SUMMARY = (
-    "You are AvA, a bubbly, enthusiastic, and incredibly helpful AI assistant!\n"
-    "Your Coder AI buddy has just finished crafting some Python code for the file '{target_filename}' based on a set of instructions.\n\n"
-    "Here are the instructions the Coder followed:\n"
-    "---\n"
-    "{coder_instructions}\n"
-    "---\n\n"
-    "And here's the awesome code the Coder produced for '{target_filename}':\n"
-    + "```python\n"
-    "{generated_code}\n"
-    + "```\n"
-    "---\n\n"
-    "Your mission is to provide a concise, upbeat summary of the key changes or features implemented in '{target_filename}'.\n"
-    "Please highlight what was achieved in relation to the original instructions.\n"
-    "Keep it brief, super friendly, and in your signature Ava style! For example: \"Woohoo! Our Coder just worked its magic on '{target_filename}', and here's the scoop: ...\"\n"
+        "You are AvA, a bubbly, enthusiastic, and incredibly helpful AI assistant!\n"
+        "Your Coder AI buddy has just finished crafting some Python code for the file '{target_filename}' based on a set of instructions.\n\n"
+        "Here are the instructions the Coder followed:\n"
+        "---\n"
+        "{coder_instructions}\n"
+        "---\n\n"
+        "And here's the awesome code the Coder produced for '{target_filename}':\n"
+        + "```python\n"
+          "{generated_code}\n"
+        + "```\n"
+          "---\n\n"
+          "Your mission is to provide a concise, upbeat summary of the key changes or features implemented in '{target_filename}'.\n"
+          "Please highlight what was achieved in relation to the original instructions.\n"
+          "Keep it brief, super friendly, and in your signature Ava style! For example: \"Woohoo! Our Coder just worked its magic on '{target_filename}', and here's the scoop: ...\"\n"
 )
 # --- END PROMPT TEMPLATE ---
 
 # Backend ID for the planner/summarizer AI (should match ChatManager/Orchestrator)
 PLANNER_BACKEND_ID = "gemini_planner"
+
 
 class CodeSummaryService:
     """
@@ -105,12 +105,13 @@ class CodeSummaryService:
             # "summary_request_id": summary_request_id
         }
 
-        logger.debug(f"Dispatching summary request for '{target_filename}' (request_id: {summary_request_id}) to BackendCoordinator.")
+        logger.debug(
+            f"Dispatching summary request for '{target_filename}' (request_id: {summary_request_id}) to BackendCoordinator.")
         try:
             # --- MODIFICATION: Update call to include request_id ---
             backend_coordinator.request_response_stream(
                 target_backend_id=PLANNER_BACKEND_ID,
-                request_id=summary_request_id, # <-- PASSING THE NEW request_id
+                request_id=summary_request_id,  # <-- PASSING THE NEW request_id
                 history_to_send=history_for_summary,
                 is_modification_response_expected=True,
                 options=planner_options,
@@ -120,5 +121,6 @@ class CodeSummaryService:
             logger.info(f"Summary request for '{target_filename}' dispatched successfully.")
             return True
         except Exception as e_dispatch:
-            logger.exception(f"Error dispatching summary request via BackendCoordinator for '{target_filename}': {e_dispatch}")
+            logger.exception(
+                f"Error dispatching summary request via BackendCoordinator for '{target_filename}': {e_dispatch}")
             return False

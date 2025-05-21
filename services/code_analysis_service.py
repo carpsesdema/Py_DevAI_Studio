@@ -1,10 +1,11 @@
 # services/code_analysis_service.py
 import ast
-import os
 import logging
+import os
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
 
 class CodeAnalysisService:
     """
@@ -50,9 +51,10 @@ class CodeAnalysisService:
                         return node.end_lineno
                     else:
                         # Basic fallback if end_lineno not available
-                        logger.debug(f"Node '{getattr(node, 'name', 'Unnamed')}' in {os.path.basename(self.file_path_for_log)} lacks 'end_lineno'. Estimating.")
+                        logger.debug(
+                            f"Node '{getattr(node, 'name', 'Unnamed')}' in {os.path.basename(self.file_path_for_log)} lacks 'end_lineno'. Estimating.")
                         # A more complex estimation could walk child nodes max line, but keep simple for now.
-                        return node.lineno # Simplest fallback: ends on start line
+                        return node.lineno  # Simplest fallback: ends on start line
 
                 def visit_FunctionDef(self, node: ast.FunctionDef):
                     end_line = self._get_end_line(node)
@@ -64,8 +66,9 @@ class CodeAnalysisService:
                             "end_line": end_line
                         })
                     else:
-                         logger.warning(f"Could not determine end line for function '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
-                    self.generic_visit(node) # Continue visiting children
+                        logger.warning(
+                            f"Could not determine end line for function '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
+                    self.generic_visit(node)  # Continue visiting children
 
                 def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
                     # Treat async functions the same as regular functions
@@ -73,13 +76,14 @@ class CodeAnalysisService:
                     if end_line is not None:
                         self.structures.append({
                             "name": node.name,
-                            "type": "function", # Keep type consistent as 'function'
+                            "type": "function",  # Keep type consistent as 'function'
                             "start_line": node.lineno,
                             "end_line": end_line
                         })
                     else:
-                         logger.warning(f"Could not determine end line for async function '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
-                    self.generic_visit(node) # Continue visiting children
+                        logger.warning(
+                            f"Could not determine end line for async function '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
+                    self.generic_visit(node)  # Continue visiting children
 
                 def visit_ClassDef(self, node: ast.ClassDef):
                     end_line = self._get_end_line(node)
@@ -91,8 +95,9 @@ class CodeAnalysisService:
                             "end_line": end_line
                         })
                     else:
-                         logger.warning(f"Could not determine end line for class '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
-                    self.generic_visit(node) # Continue visiting children
+                        logger.warning(
+                            f"Could not determine end line for class '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
+                    self.generic_visit(node)  # Continue visiting children
 
             # Instantiate and run the visitor
             visitor = StructureVisitor(file_path)
@@ -101,7 +106,8 @@ class CodeAnalysisService:
             logger.info(f"Extracted {len(structures)} functions/classes from: {os.path.basename(file_path)}")
 
         except SyntaxError as e:
-            logger.warning(f"AST SyntaxError parsing {os.path.basename(file_path)}: {e}. Skipping structure extraction for this file.")
+            logger.warning(
+                f"AST SyntaxError parsing {os.path.basename(file_path)}: {e}. Skipping structure extraction for this file.")
             # Return empty list, don't stop processing other files
         except Exception as e:
             # Catch other potential AST errors (e.g., recursion depth)

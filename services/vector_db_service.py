@@ -1,18 +1,21 @@
 # services/vector_db_service.py
 import logging
 import os
-import shutil # For deleting collection directories
-import pickle # For saving/loading metadata (simple persistence)
+import pickle  # For saving/loading metadata (simple persistence)
+import shutil  # For deleting collection directories
+
 # Ensure faiss and numpy are imported
 try:
     import faiss
     import numpy as np
+
     FAISS_AVAILABLE = True
 except ImportError:
-    faiss = None # type: ignore
-    np = None # type: ignore
+    faiss = None  # type: ignore
+    np = None  # type: ignore
     FAISS_AVAILABLE = False
-    logging.critical("VectorDBService: FAISS or NumPy library not found. RAG DB cannot function. Install: pip install faiss-cpu numpy")
+    logging.critical(
+        "VectorDBService: FAISS or NumPy library not found. RAG DB cannot function. Install: pip install faiss-cpu numpy")
 
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -23,6 +26,7 @@ from utils import constants
 GLOBAL_COLLECTION_ID = constants.GLOBAL_COLLECTION_ID
 
 logger = logging.getLogger(__name__)
+
 
 class VectorDBService:
     """
@@ -67,14 +71,14 @@ class VectorDBService:
         # --- MODIFICATION START: Set _service_ready earlier ---
         # If FAISS is available and basic checks passed, consider the service's core ready
         # for collection management operations like loading or creating.
-        if FAISS_AVAILABLE: # Redundant check as it's done above, but good for clarity here
+        if FAISS_AVAILABLE:  # Redundant check as it's done above, but good for clarity here
             self._service_ready = True
             logger.info("VectorDBService: Core dependencies (FAISS) ready. Proceeding with collection loading.")
         else:
             # This case should ideally be caught by the `if not FAISS_AVAILABLE:` check at the top of __init__.
             # If it somehow reaches here, it's a critical failure.
             logger.critical("VectorDBService: FAISS not available at a critical point. Cannot set service as ready.")
-            return # Service cannot function without FAISS
+            return  # Service cannot function without FAISS
         # --- MODIFICATION END ---
 
         # --- Load Existing Collections ---
@@ -87,16 +91,15 @@ class VectorDBService:
 
         # Final check for overall service readiness (specifically if global collection is OK)
         if global_coll_exists_and_loaded and GLOBAL_COLLECTION_ID in self._collections_data:
-             # _service_ready is already True if we reached here.
-             logger.info("VectorDBService initialized successfully and global collection is ready.")
+            # _service_ready is already True if we reached here.
+            logger.info("VectorDBService initialized successfully and global collection is ready.")
         else:
-             # If global collection failed despite service being "core ready", log an error.
-             # The service itself (_service_ready=True) might still be usable for other collections if they loaded correctly.
-             logger.error(
-                 "VectorDBService initialized, but the global collection ('%s') could not be properly created or loaded. "
-                 "RAG functionality relying on the global context may be impaired.", GLOBAL_COLLECTION_ID
-             )
-
+            # If global collection failed despite service being "core ready", log an error.
+            # The service itself (_service_ready=True) might still be usable for other collections if they loaded correctly.
+            logger.error(
+                "VectorDBService initialized, but the global collection ('%s') could not be properly created or loaded. "
+                "RAG functionality relying on the global context may be impaired.", GLOBAL_COLLECTION_ID
+            )
 
     def _load_all_collections_from_disk(self):
         """Scans the base directory and attempts to load all collection data."""
@@ -107,7 +110,7 @@ class VectorDBService:
                 for item_name in os.listdir(self.base_persist_directory):
                     collection_dir = os.path.join(self.base_persist_directory, item_name)
                     if os.path.isdir(collection_dir):
-                        collection_id = item_name # Use directory name as collection ID
+                        collection_id = item_name  # Use directory name as collection ID
                         logger.debug(f"  Attempting to load collection '{collection_id}' from {collection_dir}...")
                         loaded_data = self._load_collection_data(collection_id)
                         if loaded_data:
@@ -121,12 +124,11 @@ class VectorDBService:
         except Exception as e:
             logger.exception(f"Error scanning or loading collections from disk: {e}")
 
-
     def _load_collection_data(self, collection_id: str) -> Optional[Tuple[faiss.Index, List[Dict[str, Any]]]]:
         """Loads a single collection's FAISS index and metadata from disk."""
         collection_dir = os.path.join(self.base_persist_directory, collection_id)
         index_path = os.path.join(collection_dir, "faiss.index")
-        metadata_path = os.path.join(collection_dir, "metadata.pkl") # Using pickle
+        metadata_path = os.path.join(collection_dir, "metadata.pkl")  # Using pickle
 
         if not os.path.exists(index_path) or not os.path.exists(metadata_path):
             logger.debug(f"Collection files not found for '{collection_id}' at {collection_dir}")
@@ -141,15 +143,17 @@ class VectorDBService:
                 metadata = pickle.load(f)
 
             if not isinstance(metadata, list):
-                 logger.error(f"Loaded metadata for '{collection_id}' is not a list ({type(metadata)}). Corrupt?")
-                 return None
+                logger.error(f"Loaded metadata for '{collection_id}' is not a list ({type(metadata)}). Corrupt?")
+                return None
 
             if index.ntotal != len(metadata):
-                logger.warning(f"Mismatch between FAISS index size ({index.ntotal}) and metadata count ({len(metadata)}) for collection '{collection_id}'. Data might be inconsistent.")
+                logger.warning(
+                    f"Mismatch between FAISS index size ({index.ntotal}) and metadata count ({len(metadata)}) for collection '{collection_id}'. Data might be inconsistent.")
 
             if index.d != self._index_dim:
-                 logger.error(f"Loaded FAISS index dimension ({index.d}) for collection '{collection_id}' does not match service dimension ({self._index_dim}). Cannot load.")
-                 return None
+                logger.error(
+                    f"Loaded FAISS index dimension ({index.d}) for collection '{collection_id}' does not match service dimension ({self._index_dim}). Cannot load.")
+                return None
 
             return index, metadata
         except Exception as e:
@@ -159,8 +163,8 @@ class VectorDBService:
     def _save_collection_data(self, collection_id: str, index: faiss.Index, metadata: List[Dict[str, Any]]) -> bool:
         """Saves a single collection's FAISS index and metadata to disk."""
         if not FAISS_AVAILABLE:
-             logger.error("Cannot save collection data: FAISS not available.")
-             return False
+            logger.error("Cannot save collection data: FAISS not available.")
+            return False
 
         collection_dir = os.path.join(self.base_persist_directory, collection_id)
         index_path = os.path.join(collection_dir, "faiss.index")
@@ -177,29 +181,29 @@ class VectorDBService:
             logger.exception(f"Error saving collection data for '{collection_id}': {e}")
             return False
 
-
     def get_or_create_collection(self, collection_id: str) -> bool:
         """
         Ensures a collection exists and is loaded into memory.
         If it doesn't exist on disk, creates a new empty one.
         """
         if not FAISS_AVAILABLE or not self._service_ready:
-             logger.error(f"Cannot get/create collection '{collection_id}': FAISS not available ({FAISS_AVAILABLE}) or Service not ready ({self._service_ready}).")
-             return False
+            logger.error(
+                f"Cannot get/create collection '{collection_id}': FAISS not available ({FAISS_AVAILABLE}) or Service not ready ({self._service_ready}).")
+            return False
 
         if not isinstance(collection_id, str) or not collection_id.strip():
-             logger.error("Cannot get/create collection: Invalid or empty collection_id provided.")
-             return False
+            logger.error("Cannot get/create collection: Invalid or empty collection_id provided.")
+            return False
 
         if collection_id in self._collections_data:
-             logger.debug(f"Collection '{collection_id}' already loaded in memory.")
-             return True
+            logger.debug(f"Collection '{collection_id}' already loaded in memory.")
+            return True
 
         loaded_data = self._load_collection_data(collection_id)
         if loaded_data:
-             self._collections_data[collection_id] = loaded_data
-             logger.info(f"Loaded collection '{collection_id}' from disk.")
-             return True
+            self._collections_data[collection_id] = loaded_data
+            logger.info(f"Loaded collection '{collection_id}' from disk.")
+            return True
 
         logger.info(f"Collection '{collection_id}' not found. Creating new...")
         try:
@@ -213,8 +217,8 @@ class VectorDBService:
                 logger.info(f"Created and loaded new collection '{collection_id}'.")
                 return True
             else:
-                 logger.error(f"Failed to save newly created collection '{collection_id}' to disk.")
-                 return False
+                logger.error(f"Failed to save newly created collection '{collection_id}' to disk.")
+                return False
         except Exception as e:
             logger.exception(f"Error creating new collection '{collection_id}': {e}")
             return False
@@ -257,9 +261,11 @@ class VectorDBService:
 
     def delete_collection(self, collection_id: str) -> bool:
         if not self._service_ready:
-             logger.error(f"Cannot delete collection '{collection_id}': Service not ready."); return False
+            logger.error(f"Cannot delete collection '{collection_id}': Service not ready.");
+            return False
         if collection_id == GLOBAL_COLLECTION_ID:
-            logger.error(f"Cannot delete the global collection '{GLOBAL_COLLECTION_ID}'."); return False
+            logger.error(f"Cannot delete the global collection '{GLOBAL_COLLECTION_ID}'.");
+            return False
 
         collection_dir = os.path.join(self.base_persist_directory, collection_id)
         removed_from_memory = False
@@ -272,30 +278,37 @@ class VectorDBService:
 
         disk_deleted = False
         if os.path.isdir(collection_dir):
-             logger.info(f"Attempting to delete collection directory from disk: {collection_dir}")
-             try:
-                 shutil.rmtree(collection_dir)
-                 logger.info(f"Collection directory '{collection_id}' deleted successfully from disk.")
-                 disk_deleted = True
-             except Exception as e:
-                  logger.exception(f"Error deleting collection directory '{collection_id}': {e}")
+            logger.info(f"Attempting to delete collection directory from disk: {collection_dir}")
+            try:
+                shutil.rmtree(collection_dir)
+                logger.info(f"Collection directory '{collection_id}' deleted successfully from disk.")
+                disk_deleted = True
+            except Exception as e:
+                logger.exception(f"Error deleting collection directory '{collection_id}': {e}")
         else:
-             logger.warning(f"Collection directory '{collection_id}' not found on disk either.")
-             if not removed_from_memory: return False
+            logger.warning(f"Collection directory '{collection_id}' not found on disk either.")
+            if not removed_from_memory: return False
 
         return removed_from_memory or disk_deleted
 
     def add_embeddings(self, collection_id: str, embeddings: np.ndarray, metadatas: List[Dict[str, Any]]) -> bool:
         if not self.is_ready(collection_id):
-            logger.error(f"Cannot add embeddings: Collection '{collection_id}' not loaded or service not ready."); return False
+            logger.error(f"Cannot add embeddings: Collection '{collection_id}' not loaded or service not ready.");
+            return False
         if not isinstance(embeddings, np.ndarray) or not isinstance(metadatas, list):
-            logger.error("Invalid input: embeddings must be a NumPy array, metadatas a list."); return False
+            logger.error("Invalid input: embeddings must be a NumPy array, metadatas a list.");
+            return False
         if embeddings.shape[0] != len(metadatas):
-            logger.error(f"Input length mismatch: embeddings count ({embeddings.shape[0]}) != metadata count ({len(metadatas)})."); return False
-        if embeddings.ndim != 2 or embeddings.shape[1] != self._index_dim: # Added ndim check
-             logger.error(f"Embedding dimension mismatch or incorrect shape: Got {embeddings.shape}, expected (n, {self._index_dim})."); return False
+            logger.error(
+                f"Input length mismatch: embeddings count ({embeddings.shape[0]}) != metadata count ({len(metadatas)}).");
+            return False
+        if embeddings.ndim != 2 or embeddings.shape[1] != self._index_dim:  # Added ndim check
+            logger.error(
+                f"Embedding dimension mismatch or incorrect shape: Got {embeddings.shape}, expected (n, {self._index_dim}).");
+            return False
         if embeddings.shape[0] == 0:
-             logger.warning(f"No embeddings provided to add to collection '{collection_id}'."); return True
+            logger.warning(f"No embeddings provided to add to collection '{collection_id}'.");
+            return True
 
         collection_index, collection_metadata = self._collections_data[collection_id]
         logger.info(f"Adding {embeddings.shape[0]} embeddings to collection '{collection_id}'...")
@@ -303,26 +316,33 @@ class VectorDBService:
             collection_index.add(embeddings)
             collection_metadata.extend(metadatas)
             if self._save_collection_data(collection_id, collection_index, collection_metadata):
-                 logger.info(f"Successfully added and saved {embeddings.shape[0]} embeddings to '{collection_id}'.")
-                 return True
+                logger.info(f"Successfully added and saved {embeddings.shape[0]} embeddings to '{collection_id}'.")
+                return True
             else:
-                 logger.error(f"Successfully added embeddings to '{collection_id}' index but FAILED TO SAVE metadata/index.")
-                 return False
+                logger.error(
+                    f"Successfully added embeddings to '{collection_id}' index but FAILED TO SAVE metadata/index.")
+                return False
         except Exception as e:
             logger.exception(f"Error adding embeddings to collection '{collection_id}': {e}")
             return False
 
     def search(self, collection_id: str, query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
         if not self.is_ready(collection_id):
-            logger.error(f"Cannot search: Collection '{collection_id}' not loaded or service not ready."); return []
-        if not isinstance(query_embedding, np.ndarray) or query_embedding.ndim != 2 or query_embedding.shape[0] != 1 or query_embedding.shape[1] != self._index_dim :
-            logger.error(f"Invalid query embedding format/dimension: Expected (1, {self._index_dim}), got {query_embedding.shape}."); return []
+            logger.error(f"Cannot search: Collection '{collection_id}' not loaded or service not ready.");
+            return []
+        if not isinstance(query_embedding, np.ndarray) or query_embedding.ndim != 2 or query_embedding.shape[0] != 1 or \
+                query_embedding.shape[1] != self._index_dim:
+            logger.error(
+                f"Invalid query embedding format/dimension: Expected (1, {self._index_dim}), got {query_embedding.shape}.");
+            return []
         if not isinstance(k, int) or k <= 0:
-             logger.warning(f"Invalid k value ({k}), using default 5."); k = 5
+            logger.warning(f"Invalid k value ({k}), using default 5.");
+            k = 5
 
         collection_index, collection_metadata = self._collections_data[collection_id]
         if collection_index.ntotal == 0:
-             logger.info(f"Collection '{collection_id}' is empty. Returning no search results."); return []
+            logger.info(f"Collection '{collection_id}' is empty. Returning no search results.");
+            return []
         effective_k = min(k, collection_index.ntotal)
         if effective_k == 0: return []
 
@@ -340,7 +360,8 @@ class VectorDBService:
                     if "collection_id" not in metadata: metadata["collection_id"] = collection_id
                     results.append({'content': content, 'metadata': metadata, 'distance': float(distance_val)})
                 else:
-                    logger.warning(f"Search returned index {vector_index_in_collection} for collection '{collection_id}' out of bounds for metadata ({len(collection_metadata)}).")
+                    logger.warning(
+                        f"Search returned index {vector_index_in_collection} for collection '{collection_id}' out of bounds for metadata ({len(collection_metadata)}).")
             logger.info(f"Search completed for collection '{collection_id}'. Found {len(results)} relevant items.")
             return results
         except Exception as e:
@@ -349,7 +370,8 @@ class VectorDBService:
 
     def get_all_metadata(self, collection_id: str) -> List[Dict[str, Any]]:
         if not self.is_ready(collection_id):
-            logger.error(f"Cannot get metadata: Collection '{collection_id}' not loaded or service not ready."); return []
+            logger.error(f"Cannot get metadata: Collection '{collection_id}' not loaded or service not ready.");
+            return []
         _, collection_metadata = self._collections_data[collection_id]
         logger.info(f"Retrieving all metadata ({len(collection_metadata)} items) from collection '{collection_id}'.")
         return list(collection_metadata)
@@ -357,27 +379,37 @@ class VectorDBService:
     def get_collection_size(self, collection_id: str) -> int:
         logger.debug(f"[RAG_VIEW_DEBUG] get_collection_size called for ID: '{collection_id}'")
         if not self.is_ready(collection_id):
-            logger.warning(f"[RAG_VIEW_DEBUG] Cannot get size for '{collection_id}': is_ready() returned False."); return -1
+            logger.warning(f"[RAG_VIEW_DEBUG] Cannot get size for '{collection_id}': is_ready() returned False.");
+            return -1
         try:
             if collection_id not in self._collections_data:
-                 logger.warning(f"[RAG_VIEW_DEBUG] Cannot get size: Collection ID '{collection_id}' not found in _collections_data, though is_ready passed for it. This is unexpected."); return -1
+                logger.warning(
+                    f"[RAG_VIEW_DEBUG] Cannot get size: Collection ID '{collection_id}' not found in _collections_data, though is_ready passed for it. This is unexpected.");
+                return -1
 
             collection_index, _ = self._collections_data[collection_id]
             count = collection_index.ntotal
             logger.debug(f"[RAG_VIEW_DEBUG] Collection '{collection_id}' FAISS index.ntotal = {count}")
             return count
         except KeyError:
-            logger.warning(f"[RAG_VIEW_DEBUG] Cannot get size: Collection ID '{collection_id}' not found in _collections_data (KeyError during access)."); return -1
+            logger.warning(
+                f"[RAG_VIEW_DEBUG] Cannot get size: Collection ID '{collection_id}' not found in _collections_data (KeyError during access).");
+            return -1
         except Exception as e:
-            logger.exception(f"[RAG_VIEW_DEBUG] Error getting count for collection '{collection_id}': {e}"); return -1
+            logger.exception(f"[RAG_VIEW_DEBUG] Error getting count for collection '{collection_id}': {e}");
+            return -1
 
     def clear_collection(self, collection_id: str) -> bool:
         if collection_id == GLOBAL_COLLECTION_ID:
-             logger.error(f"Clearing the global collection ('{GLOBAL_COLLECTION_ID}') is not permitted via this method."); return False
+            logger.error(
+                f"Clearing the global collection ('{GLOBAL_COLLECTION_ID}') is not permitted via this method.");
+            return False
         if not self.is_ready(collection_id):
-             logger.error(f"Cannot clear collection '{collection_id}': Not loaded or service not ready."); return False
+            logger.error(f"Cannot clear collection '{collection_id}': Not loaded or service not ready.");
+            return False
 
-        logger.warning(f"Attempting to clear all items from collection '{collection_id}' by re-creating index and metadata...")
+        logger.warning(
+            f"Attempting to clear all items from collection '{collection_id}' by re-creating index and metadata...")
         try:
             if faiss is None:
                 logger.error("FAISS library not available for clearing collection.")
@@ -385,12 +417,12 @@ class VectorDBService:
             new_index = faiss.IndexFlatL2(self._index_dim)
             new_metadata: List[Dict[str, Any]] = []
             if self._save_collection_data(collection_id, new_index, new_metadata):
-                 self._collections_data[collection_id] = (new_index, new_metadata)
-                 logger.info(f"Collection '{collection_id}' cleared successfully (by recreating).")
-                 return True
+                self._collections_data[collection_id] = (new_index, new_metadata)
+                logger.info(f"Collection '{collection_id}' cleared successfully (by recreating).")
+                return True
             else:
-                 logger.error(f"Failed to save cleared collection '{collection_id}' to disk.")
-                 return False
+                logger.error(f"Failed to save cleared collection '{collection_id}' to disk.")
+                return False
         except Exception as e:
             logger.exception(f"Error during the process of clearing collection '{collection_id}': {e}")
             return False

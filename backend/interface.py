@@ -4,6 +4,7 @@ from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple  # Dict, Any
 
 from core.models import ChatMessage
 
+
 class BackendInterface(ABC):
     """Abstract Base Class defining the interface for AI backend communication."""
 
@@ -16,7 +17,8 @@ class BackendInterface(ABC):
 
     # --- MODIFIED SIGNATURE ---
     @abstractmethod
-    async def get_response_stream(self, history: List[ChatMessage], options: Optional[Dict[str, Any]] = None) -> AsyncGenerator[str, None]:
+    async def get_response_stream(self, history: List[ChatMessage], options: Optional[Dict[str, Any]] = None) -> \
+    AsyncGenerator[str, None]:
         """
         Gets a streaming response from the AI backend based on the provided history.
 
@@ -32,9 +34,10 @@ class BackendInterface(ABC):
         """
         # This is abstract, so implementations must define it.
         # The type hint ensures it's treated as an async generator.
-        if False: # This code is never executed, it's just for type hinting correctness
-             yield ''
+        if False:  # This code is never executed, it's just for type hinting correctness
+            yield ''
         pass
+
     # --- END MODIFIED SIGNATURE ---
 
     @abstractmethod
@@ -61,7 +64,7 @@ class BackendInterface(ABC):
     # --- NEW (from previous adapter updates, already present in your combined.txt) ---
     # This was already added to your combined.txt for the adapters, but good to ensure it's here.
     @abstractmethod
-    def get_last_token_usage(self) -> Optional[Tuple[int, int]]: # Added Tuple
+    def get_last_token_usage(self) -> Optional[Tuple[int, int]]:  # Added Tuple
         """
         Returns the token usage (prompt_tokens, completion_tokens) from the last call.
         Returns None if not available or not applicable.

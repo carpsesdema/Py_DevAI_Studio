@@ -1,18 +1,18 @@
 # ui/chat_item_delegate.py
-import logging
 import base64
-import html
 import hashlib
+import html
+import logging
 import os
-from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
+from typing import Optional, Dict, Any, Tuple
 
-from PyQt6.QtWidgets import QStyledItemDelegate, QStyle, QApplication, QStyleOptionViewItem, QWidget
+from PyQt6.QtCore import QModelIndex, QRect, QPoint, QSize, Qt, QObject, QByteArray, QPersistentModelIndex, pyqtSlot
 from PyQt6.QtGui import (
     QPainter, QColor, QFontMetrics, QTextDocument, QPixmap, QImage, QFont,
     QMovie, QPen
 )
-from PyQt6.QtCore import QModelIndex, QRect, QPoint, QSize, Qt, QObject, QByteArray, QPersistentModelIndex, pyqtSlot
+from PyQt6.QtWidgets import QStyledItemDelegate, QStyle, QStyleOptionViewItem, QWidget
 
 try:
     from core.models import ChatMessage, USER_ROLE, MODEL_ROLE, SYSTEM_ROLE, ERROR_ROLE
@@ -21,20 +21,33 @@ try:
     from utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE, ASSETS_PATH
 except ImportError:
     try:
-        from ..core.models import ChatMessage, USER_ROLE, MODEL_ROLE, SYSTEM_ROLE, ERROR_ROLE # type: ignore
-        from ..core.message_enums import MessageLoadingState # type: ignore
-        from ..ui.chat_list_model import ChatMessageRole, LoadingStatusRole # type: ignore
-        from ..utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE, ASSETS_PATH # type: ignore
+        from ..core.models import ChatMessage, USER_ROLE, MODEL_ROLE, SYSTEM_ROLE, ERROR_ROLE  # type: ignore
+        from ..core.message_enums import MessageLoadingState  # type: ignore
+        from ..ui.chat_list_model import ChatMessageRole, LoadingStatusRole  # type: ignore
+        from ..utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE, ASSETS_PATH  # type: ignore
     except ImportError as e_imp:
         logging.critical(f"ChatItemDelegate: Failed to import dependencies: {e_imp}")
-        class ChatMessage: pass # type: ignore
+
+
+        class ChatMessage:
+            pass  # type: ignore
+
+
         from enum import Enum, auto
-        class MessageLoadingState(Enum): IDLE=auto(); LOADING=auto(); COMPLETED=auto(); ERROR=auto() # type: ignore
-        ChatMessageRole, LoadingStatusRole = 0, 1 # type: ignore
-        CHAT_FONT_FAMILY="Arial"; CHAT_FONT_SIZE=10; ASSETS_PATH="assets" # type: ignore
+
+
+        class MessageLoadingState(Enum):
+            IDLE = auto(); LOADING = auto(); COMPLETED = auto(); ERROR = auto()  # type: ignore
+
+
+        ChatMessageRole, LoadingStatusRole = 0, 1  # type: ignore
+        CHAT_FONT_FAMILY = "Arial";
+        CHAT_FONT_SIZE = 10;
+        ASSETS_PATH = "assets"  # type: ignore
 
 try:
     import markdown
+
     MARKDOWN_AVAILABLE = True
 except ImportError:
     MARKDOWN_AVAILABLE = False
@@ -82,7 +95,7 @@ class ChatItemDelegate(QStyledItemDelegate):
         self._text_doc_cache: Dict[Tuple[str, int, bool, str], QTextDocument] = {}
         self._image_pixmap_cache: Dict[str, QPixmap] = {}
 
-        self._loading_animation_movie_template: Optional[QMovie] = None # Template movie
+        self._loading_animation_movie_template: Optional[QMovie] = None  # Template movie
         self._completed_icon_pixmap: Optional[QPixmap] = None
         self._active_loading_movies: Dict[QPersistentModelIndex, QMovie] = {}
         self._view_ref: Optional[QWidget] = None
@@ -141,9 +154,9 @@ class ChatItemDelegate(QStyledItemDelegate):
         for p_index, active_movie in list(self._active_loading_movies.items()):
             if active_movie == movie_sender:
                 if p_index.isValid() and self._view_ref.model() and \
-                   self._view_ref.model().data(p_index, LoadingStatusRole) == MessageLoadingState.LOADING:
+                        self._view_ref.model().data(p_index, LoadingStatusRole) == MessageLoadingState.LOADING:
                     self._view_ref.update(p_index)
-                else: # Stale entry or state changed
+                else:  # Stale entry or state changed
                     logger.debug(f"Delegate: Removing stale/invalid QMovie for row {p_index.row()}.")
                     active_movie.stop()
                     active_movie.frameChanged.disconnect(self._on_movie_frame_changed)
@@ -157,8 +170,10 @@ class ChatItemDelegate(QStyledItemDelegate):
         self._image_pixmap_cache.clear()
         for p_index, movie in list(self._active_loading_movies.items()):
             movie.stop()
-            try: movie.frameChanged.disconnect(self._on_movie_frame_changed)
-            except TypeError: pass
+            try:
+                movie.frameChanged.disconnect(self._on_movie_frame_changed)
+            except TypeError:
+                pass
             movie.deleteLater()
         self._active_loading_movies.clear()
 
@@ -169,7 +184,8 @@ class ChatItemDelegate(QStyledItemDelegate):
         message = index.data(ChatMessageRole)
         if not isinstance(message, ChatMessage):
             super().paint(painter, option, index)
-            painter.restore(); return
+            painter.restore();
+            return
 
         loading_status = index.model().data(index, LoadingStatusRole)
         if not isinstance(loading_status, MessageLoadingState):
@@ -211,7 +227,8 @@ class ChatItemDelegate(QStyledItemDelegate):
                     target_width = min(pixmap.width(), content_width_constraint, MAX_IMAGE_WIDTH)
                     scaled_pixmap = pixmap.scaledToWidth(target_width, Qt.TransformationMode.SmoothTransformation)
                     if scaled_pixmap.height() > MAX_IMAGE_HEIGHT:
-                        scaled_pixmap = scaled_pixmap.scaledToHeight(MAX_IMAGE_HEIGHT, Qt.TransformationMode.SmoothTransformation)
+                        scaled_pixmap = scaled_pixmap.scaledToHeight(MAX_IMAGE_HEIGHT,
+                                                                     Qt.TransformationMode.SmoothTransformation)
                     if current_y + scaled_pixmap.height() <= content_placement_rect.bottom() + 1:
                         if image_count > 0: current_y += IMAGE_PADDING
                         img_x = content_placement_rect.left() + (content_width_constraint - scaled_pixmap.width()) // 2
@@ -219,9 +236,10 @@ class ChatItemDelegate(QStyledItemDelegate):
                         painter.drawPixmap(img_rect.topLeft(), scaled_pixmap)
                         current_y += scaled_pixmap.height()
                         image_count += 1
-                    else: break
+                    else:
+                        break
 
-        persistent_index = QPersistentModelIndex(index) # Use persistent index for map keys
+        persistent_index = QPersistentModelIndex(index)  # Use persistent index for map keys
         if message.role == MODEL_ROLE and content_width_constraint > 0:
             indicator_x = bubble_rect.right() - INDICATOR_SIZE.width() - INDICATOR_PADDING_X
             indicator_y = bubble_rect.bottom() - INDICATOR_SIZE.height() - INDICATOR_PADDING_Y
@@ -237,20 +255,25 @@ class ChatItemDelegate(QStyledItemDelegate):
                             active_movie.frameChanged.connect(self._on_movie_frame_changed)
                             self._active_loading_movies[persistent_index] = active_movie
                             active_movie.start()
-                        else: active_movie = None; logger.error("Failed to create new QMovie for loading item.")
+                        else:
+                            active_movie = None; logger.error("Failed to create new QMovie for loading item.")
                 if active_movie and active_movie.isValid():
                     painter.drawPixmap(indicator_rect, active_movie.currentPixmap())
 
             elif loading_status == MessageLoadingState.COMPLETED:
                 if persistent_index in self._active_loading_movies:
                     old_movie = self._active_loading_movies.pop(persistent_index)
-                    old_movie.stop(); old_movie.frameChanged.disconnect(self._on_movie_frame_changed); old_movie.deleteLater()
+                    old_movie.stop();
+                    old_movie.frameChanged.disconnect(self._on_movie_frame_changed);
+                    old_movie.deleteLater()
                 if self._completed_icon_pixmap:
                     painter.drawPixmap(indicator_rect, self._completed_icon_pixmap)
-            else: # IDLE or ERROR
+            else:  # IDLE or ERROR
                 if persistent_index in self._active_loading_movies:
                     old_movie = self._active_loading_movies.pop(persistent_index)
-                    old_movie.stop(); old_movie.frameChanged.disconnect(self._on_movie_frame_changed); old_movie.deleteLater()
+                    old_movie.stop();
+                    old_movie.frameChanged.disconnect(self._on_movie_frame_changed);
+                    old_movie.deleteLater()
 
         formatted_timestamp = self._format_timestamp(message.timestamp)
         if formatted_timestamp:
@@ -281,7 +304,8 @@ class ChatItemDelegate(QStyledItemDelegate):
 
         if content_size is None or not isinstance(content_size, QSize):
             min_bubble_base_height = self._font_metrics.height() + 2 * BUBBLE_PADDING_V
-            return QSize(available_view_width, max(min_bubble_base_height, TIMESTAMP_PADDING_TOP + TIMESTAMP_HEIGHT + 2 * BUBBLE_MARGIN_V))
+            return QSize(available_view_width,
+                         max(min_bubble_base_height, TIMESTAMP_PADDING_TOP + TIMESTAMP_HEIGHT + 2 * BUBBLE_MARGIN_V))
 
         total_required_height = content_size.height()
         formatted_timestamp = self._format_timestamp(message.timestamp)
@@ -320,8 +344,8 @@ class ChatItemDelegate(QStyledItemDelegate):
         try:
             max_bubble_width = int(total_item_width * BUBBLE_MAX_WIDTH_PERCENTAGE)
             if is_user:
-                 max_user_bubble_width_considering_indent = total_item_width - (2 * BUBBLE_MARGIN_H) - USER_BUBBLE_INDENT
-                 max_bubble_width = min(max_bubble_width, max_user_bubble_width_considering_indent)
+                max_user_bubble_width_considering_indent = total_item_width - (2 * BUBBLE_MARGIN_H) - USER_BUBBLE_INDENT
+                max_bubble_width = min(max_bubble_width, max_user_bubble_width_considering_indent)
             max_bubble_width = max(max_bubble_width, MIN_BUBBLE_WIDTH + 2 * BUBBLE_PADDING_H)
             effective_inner_content_width = max(1, max_bubble_width - 2 * BUBBLE_PADDING_H)
             inner_width_constraint = effective_inner_content_width
@@ -346,7 +370,8 @@ class ChatItemDelegate(QStyledItemDelegate):
                         target_width = min(pixmap.width(), inner_width_constraint, MAX_IMAGE_WIDTH)
                         scaled_pixmap = pixmap.scaledToWidth(target_width, Qt.TransformationMode.SmoothTransformation)
                         if scaled_pixmap.height() > MAX_IMAGE_HEIGHT:
-                            scaled_pixmap = scaled_pixmap.scaledToHeight(MAX_IMAGE_HEIGHT, Qt.TransformationMode.SmoothTransformation)
+                            scaled_pixmap = scaled_pixmap.scaledToHeight(MAX_IMAGE_HEIGHT,
+                                                                         Qt.TransformationMode.SmoothTransformation)
                         img_render_height = max(0, scaled_pixmap.height())
                         img_render_width = max(0, scaled_pixmap.width())
                         total_height += img_render_height
@@ -390,7 +415,8 @@ class ChatItemDelegate(QStyledItemDelegate):
         # Load the bubble_style.qss content
         bubble_stylesheet_content = ""
         try:
-            bubble_style_path = os.path.join(os.path.dirname(__file__), "bubble_style.qss") # Path relative to this file
+            bubble_style_path = os.path.join(os.path.dirname(__file__),
+                                             "bubble_style.qss")  # Path relative to this file
             if os.path.exists(bubble_style_path):
                 with open(bubble_style_path, "r", encoding="utf-8") as f_style:
                     bubble_stylesheet_content = f_style.read()
@@ -415,8 +441,8 @@ class ChatItemDelegate(QStyledItemDelegate):
 
         doc.setHtml(html_content)
         doc.setTextWidth(max(width_constraint, 1))
-        if len(self._text_doc_cache) > 100: # Simple cache eviction
-            self._text_doc_cache.popitem() # Remove last item (approximates LRU for dict)
+        if len(self._text_doc_cache) > 100:  # Simple cache eviction
+            self._text_doc_cache.popitem()  # Remove last item (approximates LRU for dict)
         self._text_doc_cache[cache_key] = doc
         return doc
 
@@ -429,7 +455,8 @@ class ChatItemDelegate(QStyledItemDelegate):
                 # Convert Markdown to HTML
                 # Ensure `extra` and `sane_lists` are available if your markdown lib supports them
                 # Fenced code is common for code blocks. nl2br converts newlines to <br>.
-                md_content = markdown.markdown(text, extensions=['fenced_code', 'nl2br', 'tables', 'sane_lists', 'extra'])
+                md_content = markdown.markdown(text,
+                                               extensions=['fenced_code', 'nl2br', 'tables', 'sane_lists', 'extra'])
                 html_body_content = md_content
             except Exception as e:
                 logger.error(f"Markdown conversion failed: {e}. Using escaped plain text.")
@@ -454,12 +481,13 @@ class ChatItemDelegate(QStyledItemDelegate):
             image_bytes = base64.b64decode(base64_data)
             qimage = QImage()
             if qimage.loadFromData(image_bytes):
-                 pixmap = QPixmap.fromImage(qimage)
-                 if not pixmap.isNull():
-                     if len(self._image_pixmap_cache) > 50: self._image_pixmap_cache.popitem()
-                     self._image_pixmap_cache[data_hash] = pixmap
-                     return pixmap
-        except Exception as e: logger.error(f"Error decoding/loading image in delegate: {e}")
+                pixmap = QPixmap.fromImage(qimage)
+                if not pixmap.isNull():
+                    if len(self._image_pixmap_cache) > 50: self._image_pixmap_cache.popitem()
+                    self._image_pixmap_cache[data_hash] = pixmap
+                    return pixmap
+        except Exception as e:
+            logger.error(f"Error decoding/loading image in delegate: {e}")
         return None
 
     def _format_timestamp(self, iso_timestamp: Optional[str]) -> Optional[str]:

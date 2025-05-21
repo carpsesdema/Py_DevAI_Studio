@@ -1,6 +1,6 @@
-import logging
 import asyncio
-from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
+import logging
+from typing import List, Optional, Dict, Any, Tuple
 
 from PyQt6.QtCore import QObject, pyqtSignal
 

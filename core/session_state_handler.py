@@ -4,18 +4,19 @@
 #         - save_current_state now accepts/passes project_context_data dict.
 
 import logging
-from typing import List, Optional, Tuple, Dict, Any # Added Any
+from typing import Optional, Tuple, Dict, Any  # Added Any
 
 # Assuming services are in the parent directory 'services' relative to 'core'
 try:
     from services.session_service import SessionService
-    from core.models import ChatMessage # Keep for type hinting within SessionService if it still uses it directly
+    from core.models import ChatMessage  # Keep for type hinting within SessionService if it still uses it directly
 except ImportError as e:
     logging.critical(f"SessionStateHandler: Failed to import services/models: {e}")
     SessionService = type("SessionService", (object,), {})
     ChatMessage = type("ChatMessage", (object,), {})
 
 logger = logging.getLogger(__name__)
+
 
 class SessionStateHandler:
     """
@@ -45,9 +46,11 @@ class SessionStateHandler:
             model, personality, project_context_data = self._session_service.get_last_session()
 
             if project_context_data is not None:
-                logger.info(f"SessionStateHandler loaded state. Model: {model}, Pers: {'Set' if personality else 'None'}, ProjectContextData: {'Present' if project_context_data else 'None'}")
+                logger.info(
+                    f"SessionStateHandler loaded state. Model: {model}, Pers: {'Set' if personality else 'None'}, ProjectContextData: {'Present' if project_context_data else 'None'}")
             else:
-                logger.info(f"SessionStateHandler: No last session data found or error during load. Model: {model}, Pers: {'Set' if personality else 'None'}")
+                logger.info(
+                    f"SessionStateHandler: No last session data found or error during load. Model: {model}, Pers: {'Set' if personality else 'None'}")
             return model, personality, project_context_data
         except Exception as e:
             logger.exception("Error loading last session state via SessionStateHandler:")
@@ -57,7 +60,7 @@ class SessionStateHandler:
     def save_current_state(self,
                            model_name: Optional[str],
                            personality: Optional[str],
-                           project_context_data: Dict[str, Any]): # <<< CHANGE: Accept project_context_data dict >>>
+                           project_context_data: Dict[str, Any]):  # <<< CHANGE: Accept project_context_data dict >>>
         """
         Saves the current state to the last session file.
         Passes the project_context_data dictionary (from ProjectContextManager.save_state())
@@ -65,11 +68,12 @@ class SessionStateHandler:
         """
         try:
             # <<< CHANGE: Pass project_context_data to SessionService >>>
-            logger.debug(f"SessionStateHandler saving state. Model: {model_name}, Pers: {'Set' if personality else 'None'}, ProjectContextData: {'Provided' if project_context_data else 'Not provided'}")
+            logger.debug(
+                f"SessionStateHandler saving state. Model: {model_name}, Pers: {'Set' if personality else 'None'}, ProjectContextData: {'Provided' if project_context_data else 'Not provided'}")
             self._session_service.save_last_session(
                 model_name=model_name,
                 personality=personality,
-                project_context_data=project_context_data # Pass the actual dict
+                project_context_data=project_context_data  # Pass the actual dict
             )
             logger.debug("Saved current state via SessionStateHandler.")
         except Exception as e:

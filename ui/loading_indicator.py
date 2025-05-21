@@ -1,18 +1,19 @@
 # SynaChat/ui/loading_indicator.py
 # UPDATED FILE - Reverted to using QLabel.setScaledContents
-import os
 import logging
+import os
 from typing import Optional
 
+from PyQt6.QtCore import QSize, QTimer, Qt
+from PyQt6.QtGui import QMovie
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import QLabel, QSizePolicy
-from PyQt6.QtGui import QMovie, QPixmap
-from PyQt6.QtCore import QSize, QTimer, Qt
 
 # --- Local Imports ---
 from utils import constants
 
 logger = logging.getLogger(__name__)
+
 
 class LoadingIndicator(QLabel):
     """
@@ -40,7 +41,7 @@ class LoadingIndicator(QLabel):
         self.setMinimumSize(self.DEFAULT_MIN_SIZE)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setScaledContents(True) # *** USE QLabel SCALING ***
+        self.setScaledContents(True)  # *** USE QLabel SCALING ***
         self.setVisible(False)
 
     def _setup_movie(self):
@@ -71,7 +72,7 @@ class LoadingIndicator(QLabel):
             #     logger.warning(f"{self.__class__.__name__}: Label size invalid/empty during setup ({current_label_size}), cannot set movie scaled size yet.")
             # *** END REMOVAL ***
 
-            self.setMovie(self._movie) # Assign movie to the label
+            self.setMovie(self._movie)  # Assign movie to the label
 
             # Check frame validity (keep this check)
             if self._movie.frameCount() > 0:
@@ -79,18 +80,20 @@ class LoadingIndicator(QLabel):
                 if self._movie.jumpToFrame(0):
                     first_pixmap = self._movie.currentPixmap()
                     if first_pixmap.isNull() or first_pixmap.size().isEmpty():
-                        logger.error(f"{self.__class__.__name__}: First frame pixmap is NULL or EMPTY size after jumpToFrame(0). GIF likely unloadable by Qt.")
+                        logger.error(
+                            f"{self.__class__.__name__}: First frame pixmap is NULL or EMPTY size after jumpToFrame(0). GIF likely unloadable by Qt.")
                         # Don't raise error, just log
                     else:
                         loaded_size = first_pixmap.size()
                         logger.info(f"{self.__class__.__name__}: First frame pixmap seems valid. Size: {loaded_size}")
                 else:
-                     logger.warning(f"{self.__class__.__name__}: jumpToFrame(0) failed.")
+                    logger.warning(f"{self.__class__.__name__}: jumpToFrame(0) failed.")
             else:
-                 logger.warning(f"{self.__class__.__name__}: Movie has 0 frames according to QMovie.")
+                logger.warning(f"{self.__class__.__name__}: Movie has 0 frames according to QMovie.")
 
             self._is_setup_successful = True
-            logger.info(f"{self.__class__.__name__}: GIF '{constants.LOADING_GIF_FILENAME}' setup marked successful (frame count: {self._movie.frameCount()}).")
+            logger.info(
+                f"{self.__class__.__name__}: GIF '{constants.LOADING_GIF_FILENAME}' setup marked successful (frame count: {self._movie.frameCount()}).")
 
         except Exception as e:
             self._is_setup_successful = False
@@ -98,7 +101,7 @@ class LoadingIndicator(QLabel):
             self.setText("[X]")
             self.setStyleSheet("QLabel { color: red; font-weight: bold; background-color: pink; }")
             self.setFixedSize(self.DEFAULT_MIN_SIZE)
-            self.setScaledContents(False) # Don't scale error text
+            self.setScaledContents(False)  # Don't scale error text
             self.setVisible(True)
 
     def start(self) -> None:
@@ -129,15 +132,15 @@ class LoadingIndicator(QLabel):
     def stop(self) -> None:
         logger.debug(f"{self.__class__.__name__}: Received stop() request.")
         if not self._is_setup_successful or not self._movie:
-             if self.isVisible():
-                 logger.debug(f"{self.__class__.__name__}: Hiding indicator on stop() (setup failed).")
-                 self.setVisible(False)
-             return
+            if self.isVisible():
+                logger.debug(f"{self.__class__.__name__}: Hiding indicator on stop() (setup failed).")
+                self.setVisible(False)
+            return
 
         if self._movie.state() == QMovie.MovieState.Running:
             logger.debug(f"{self.__class__.__name__}: Stopping animation.")
             self._movie.stop()
 
         if self.isVisible():
-             logger.debug(f"{self.__class__.__name__}: Hiding indicator on stop().")
-             self.setVisible(False)
+            logger.debug(f"{self.__class__.__name__}: Hiding indicator on stop().")
+            self.setVisible(False)

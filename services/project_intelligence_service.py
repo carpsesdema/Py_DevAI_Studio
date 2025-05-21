@@ -2,7 +2,7 @@
 import logging
 import os
 from collections import defaultdict
-from typing import List, Dict, Set, Optional, Tuple, Any
+from typing import List, Dict, Set, Tuple, Any
 
 # Assuming VectorDBService is importable for type hinting
 # from .vector_db_service import VectorDBService # Or adjust path as needed

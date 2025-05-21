@@ -6,11 +6,11 @@ from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.models import ChatMessage, USER_ROLE
-# --- CORRECTED IMPORT ---
-from core.user_input_processor import UserInputProcessor, ProcessResult
+from core.modification_coordinator import ModificationCoordinator
 # --- END CORRECTED IMPORT ---
 from core.project_context_manager import ProjectContextManager
-from core.modification_coordinator import ModificationCoordinator
+# --- CORRECTED IMPORT ---
+from core.user_input_processor import UserInputProcessor
 
 # Conditional import for ProjectSummaryCoordinator
 if TYPE_CHECKING:

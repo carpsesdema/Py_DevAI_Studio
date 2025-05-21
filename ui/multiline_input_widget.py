@@ -4,15 +4,16 @@
 import logging
 from typing import Optional
 
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer
+from PyQt6.QtGui import QFont, QFontMetrics, QTextOption, QKeyEvent
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit
-from PyQt6.QtGui import QFont, QFontMetrics, QTextOption, QKeyEvent
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer
 
 # --- Local Imports ---
 from utils import constants
 
 logger = logging.getLogger(__name__)
+
 
 class MultilineInputWidget(QWidget):
     """
@@ -20,26 +21,26 @@ class MultilineInputWidget(QWidget):
     Handles Enter/Shift+Enter key presses and emits appropriate signals.
     Dynamically resizes vertically based on content within min/max limits.
     """
-    sendMessageRequested = pyqtSignal() # Signal emitted when Enter is pressed
-    textChanged = pyqtSignal()        # Re-emitted signal from internal QTextEdit
+    sendMessageRequested = pyqtSignal()  # Signal emitted when Enter is pressed
+    textChanged = pyqtSignal()  # Re-emitted signal from internal QTextEdit
 
     # Configuration for resizing
     MIN_LINES = 1
-    MAX_LINES = 8 # Adjust maximum lines as desired
-    LINE_PADDING = 8 # Extra vertical padding calculation
+    MAX_LINES = 8  # Adjust maximum lines as desired
+    LINE_PADDING = 8  # Extra vertical padding calculation
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("MultilineInputWidget")
 
         self._text_edit: Optional[QTextEdit] = None
-        self._min_height: int = 30 # Fallback min height
-        self._max_height: int = 200 # Fallback max height
+        self._min_height: int = 30  # Fallback min height
+        self._max_height: int = 200  # Fallback max height
 
         self._init_ui()
-        self._calculate_height_limits() # Calculate min/max based on font
+        self._calculate_height_limits()  # Calculate min/max based on font
         self._connect_signals()
-        self._update_height() # Set initial height
+        self._update_height()  # Set initial height
 
     def _init_ui(self):
         """Set up the internal layout and QTextEdit widget."""
@@ -48,7 +49,7 @@ class MultilineInputWidget(QWidget):
         layout.setSpacing(0)
 
         self._text_edit = QTextEdit(self)
-        self._text_edit.setObjectName("UserInputTextEdit") # For QSS styling
+        self._text_edit.setObjectName("UserInputTextEdit")  # For QSS styling
         self._text_edit.setAcceptRichText(False)
         self._text_edit.setWordWrapMode(QTextOption.WrapMode.WordWrap)
         # Placeholder text is not natively supported well with dynamic height, skipping.
@@ -78,12 +79,13 @@ class MultilineInputWidget(QWidget):
             max_base = line_height * self.MAX_LINES
 
             # Add padding/margins (consider document margins and extra padding)
-            doc_margin = int(self._text_edit.document().documentMargin()) # Usually small
+            doc_margin = int(self._text_edit.document().documentMargin())  # Usually small
             vertical_padding = self.LINE_PADDING + (doc_margin * 2)
 
             self._min_height = min_base + vertical_padding
             self._max_height = max_base + vertical_padding
-            logger.debug(f"Calculated height limits: Min={self._min_height}, Max={self._max_height} (lineH={line_height})")
+            logger.debug(
+                f"Calculated height limits: Min={self._min_height}, Max={self._max_height} (lineH={line_height})")
 
         except Exception as e:
             logger.error(f"Error calculating height limits: {e}. Using defaults.")
@@ -94,7 +96,7 @@ class MultilineInputWidget(QWidget):
         if self._text_edit:
             # Connect internal textChanged to the re-emitting signal AND height update
             self._text_edit.textChanged.connect(self.textChanged.emit)
-            self._text_edit.textChanged.connect(self._update_height) # Connect to our slot
+            self._text_edit.textChanged.connect(self._update_height)  # Connect to our slot
 
     @pyqtSlot()
     def _update_height(self):
@@ -121,11 +123,11 @@ class MultilineInputWidget(QWidget):
 
         # Only resize if the clamped height differs from current fixed height
         if self.height() != clamped_height:
-            logger.debug(f"Resizing MultilineInput: docH={doc_height:.1f} -> targetH={target_height} -> clampedH={clamped_height}")
+            logger.debug(
+                f"Resizing MultilineInput: docH={doc_height:.1f} -> targetH={target_height} -> clampedH={clamped_height}")
             self.setFixedHeight(clamped_height)
             # Required to inform the layout system about the size change
             self.updateGeometry()
-
 
     def keyPressEvent(self, event: QKeyEvent):
         """Handle Enter and Shift+Enter key presses."""
@@ -138,13 +140,13 @@ class MultilineInputWidget(QWidget):
         if is_enter and not is_shift_pressed:
             logger.debug("Enter pressed in MultilineInputWidget, emitting sendMessageRequested.")
             self.sendMessageRequested.emit()
-            event.accept() # Prevent newline insertion
+            event.accept()  # Prevent newline insertion
         elif is_enter and is_shift_pressed:
             # Allow default behavior (insert newline) - QTextEdit handles this
-             super().keyPressEvent(event)
-             # Manually trigger height update after newline insertion if needed,
-             # though textChanged should handle it.
-             # QTimer.singleShot(0, self._update_height)
+            super().keyPressEvent(event)
+            # Manually trigger height update after newline insertion if needed,
+            # though textChanged should handle it.
+            # QTimer.singleShot(0, self._update_height)
         else:
             # Other key pressed: Allow default behavior
             super().keyPressEvent(event)
@@ -161,7 +163,6 @@ class MultilineInputWidget(QWidget):
             # After clearing, reset to minimum height immediately
             self.setFixedHeight(self._min_height)
             self.updateGeometry()
-
 
     def set_focus(self):
         """Sets keyboard focus to the text editor."""

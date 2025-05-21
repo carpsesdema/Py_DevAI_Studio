@@ -6,30 +6,37 @@ import os
 from datetime import datetime
 from typing import Optional
 
+from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtGui import QFont
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QMessageBox, QAbstractItemView, QFileDialog, QLabel, QWidget
 )
-from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont
 
 # --- Local Imports ---
 # Adjust paths based on your final structure
 try:
     # --- MODIFIED IMPORTS ---
-    from core.chat_manager import ChatManager # Was from ...core.chat_manager
-    from utils import constants # Was from ...utils
-    from utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE, CONVERSATIONS_DIR # Was from ...utils.constants
+    from core.chat_manager import ChatManager  # Was from ...core.chat_manager
+    from utils import constants  # Was from ...utils
+    from utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE, CONVERSATIONS_DIR  # Was from ...utils.constants
     # --- END MODIFIED IMPORTS ---
 except ImportError as e:
     # Fallback for potential structure issues during refactoring
     logging.error(f"Error importing dependencies in session_manager_dialog.py: {e}. Check relative paths.")
+
+
     # Define dummy values if needed for the script to be syntactically valid
-    class ChatManager: pass # type: ignore
-    class constants: CHAT_FONT_FAMILY="Arial"; CHAT_FONT_SIZE=10; CONVERSATIONS_DIR="." # type: ignore
+    class ChatManager:
+        pass  # type: ignore
+
+
+    class constants:
+        CHAT_FONT_FAMILY = "Arial"; CHAT_FONT_SIZE = 10; CONVERSATIONS_DIR = "."  # type: ignore
 
 logger = logging.getLogger(__name__)
+
 
 # --- Session Manager Dialog ---
 class SessionManagerDialog(QDialog):
@@ -37,6 +44,7 @@ class SessionManagerDialog(QDialog):
     A modal dialog for managing saved chat sessions (loading, saving as, deleting).
     Requires a ChatManager instance to interact with session data.
     """
+
     def __init__(self, chat_manager: ChatManager, parent: Optional[QWidget] = None):
         super().__init__(parent)
         if not chat_manager:
@@ -48,7 +56,7 @@ class SessionManagerDialog(QDialog):
         self.setWindowTitle("Manage Sessions")
         self.setObjectName("SessionManagerDialog")
         self.setMinimumSize(500, 400)
-        self.setModal(True) # Modal dialog
+        self.setModal(True)  # Modal dialog
 
         # --- UI Setup ---
         self._init_widgets()
@@ -79,7 +87,7 @@ class SessionManagerDialog(QDialog):
         self.load_button.setToolTip("Load selected session (Double-click)")
         self.save_as_button = QPushButton("Save Current As...")
         self.save_as_button.setToolTip("Save the current chat session with a new name")
-        self.save_as_button.setEnabled(True) # Always enabled
+        self.save_as_button.setEnabled(True)  # Always enabled
         self.delete_button = QPushButton("Delete")
         self.delete_button.setToolTip("Delete selected session")
         self.close_button = QPushButton("Close")
@@ -91,7 +99,7 @@ class SessionManagerDialog(QDialog):
         layout.setContentsMargins(15, 15, 15, 15)
 
         layout.addWidget(self.list_label)
-        layout.addWidget(self.session_list_widget, 1) # List widget stretches
+        layout.addWidget(self.session_list_widget, 1)  # List widget stretches
 
         # Button Layout
         button_layout = QHBoxLayout()
@@ -107,11 +115,11 @@ class SessionManagerDialog(QDialog):
     def _connect_signals(self):
         """Connect signals and slots."""
         self.session_list_widget.itemSelectionChanged.connect(self._update_button_states)
-        self.session_list_widget.itemDoubleClicked.connect(self._handle_load) # Load on double-click
+        self.session_list_widget.itemDoubleClicked.connect(self._handle_load)  # Load on double-click
         self.load_button.clicked.connect(self._handle_load)
         self.save_as_button.clicked.connect(self._handle_save_as)
         self.delete_button.clicked.connect(self._handle_delete)
-        self.close_button.clicked.connect(self.reject) # Close rejects the dialog
+        self.close_button.clicked.connect(self.reject)  # Close rejects the dialog
 
     # --- Helper Methods ---
     def _get_selected_filepath(self) -> Optional[str]:
@@ -126,7 +134,7 @@ class SessionManagerDialog(QDialog):
 
     def refresh_list(self):
         """Refreshes the list of saved sessions from the ChatManager."""
-        current_selection_path = self._get_selected_filepath() # Remember selection
+        current_selection_path = self._get_selected_filepath()  # Remember selection
         self.session_list_widget.clear()
         logger.info("Refreshing session list in SessionManagerDialog...")
         try:
@@ -136,7 +144,7 @@ class SessionManagerDialog(QDialog):
             if not session_filepaths:
                 # Display message if no sessions found
                 item = QListWidgetItem("No saved sessions found.")
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable) # Make it unselectable
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)  # Make it unselectable
                 self.session_list_widget.addItem(item)
                 self.session_list_widget.setEnabled(False)
             else:
@@ -146,8 +154,8 @@ class SessionManagerDialog(QDialog):
                 for i, fp in enumerate(session_filepaths):
                     filename = os.path.basename(fp)
                     item = QListWidgetItem(filename)
-                    item.setData(Qt.ItemDataRole.UserRole, fp) # Store full path in data role
-                    item.setToolTip(fp) # Show full path in tooltip
+                    item.setData(Qt.ItemDataRole.UserRole, fp)  # Store full path in data role
+                    item.setToolTip(fp)  # Show full path in tooltip
                     self.session_list_widget.addItem(item)
                     # Restore selection if possible
                     if fp == current_selection_path:
@@ -165,14 +173,14 @@ class SessionManagerDialog(QDialog):
             self.session_list_widget.addItem(item)
             self.session_list_widget.setEnabled(False)
         finally:
-            self._update_button_states() # Update button states after refresh
+            self._update_button_states()  # Update button states after refresh
 
     def _update_button_states(self):
         """Enables/disables buttons based on list selection."""
         is_item_selected = self._get_selected_filepath() is not None
         self.load_button.setEnabled(is_item_selected)
         self.delete_button.setEnabled(is_item_selected)
-        self.save_as_button.setEnabled(True) # Save As is always enabled
+        self.save_as_button.setEnabled(True)  # Save As is always enabled
 
     # --- Action Handlers (Slots) ---
     @pyqtSlot()
@@ -181,8 +189,8 @@ class SessionManagerDialog(QDialog):
         filepath = self._get_selected_filepath()
         if filepath:
             logger.info(f"SessionManagerDialog requesting load of session: '{filepath}'")
-            self.chat_manager.load_chat_session(filepath) # Delegate to ChatManager
-            self.accept() # Close dialog after successful load action
+            self.chat_manager.load_chat_session(filepath)  # Delegate to ChatManager
+            self.accept()  # Close dialog after successful load action
         else:
             logger.warning("Load action triggered with no session selected.")
 
@@ -217,7 +225,7 @@ class SessionManagerDialog(QDialog):
                     filepath += ".json"
                 # Delegate saving to ChatManager
                 if self.chat_manager.save_current_chat_session(filepath):
-                    self.refresh_list() # Refresh list to show the newly saved session
+                    self.refresh_list()  # Refresh list to show the newly saved session
                     QMessageBox.information(self, "Save Successful", f"Session saved as:\n{os.path.basename(filepath)}")
                 # else: Error should be handled by ChatManager signaling MainWindow
             else:
@@ -238,14 +246,14 @@ class SessionManagerDialog(QDialog):
                 "Confirm Delete",
                 f"Are you sure you want to delete the session '{filename}'?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No # Default to No
+                QMessageBox.StandardButton.No  # Default to No
             )
 
             if confirm == QMessageBox.StandardButton.Yes:
                 logger.info(f"SessionManagerDialog requesting delete of session: '{filepath}'")
                 # Delegate deletion to ChatManager
                 if self.chat_manager.delete_chat_session(filepath):
-                    self.refresh_list() # Refresh list after successful deletion
+                    self.refresh_list()  # Refresh list after successful deletion
                 # else: Error should be handled by ChatManager signaling MainWindow
         else:
             logger.warning("Delete action triggered with no session selected.")
@@ -254,4 +262,4 @@ class SessionManagerDialog(QDialog):
     def showEvent(self, event):
         """Refresh the list when the dialog is shown."""
         super().showEvent(event)
-        self.refresh_list() # Ensure list is up-to-date when shown
+        self.refresh_list()  # Ensure list is up-to-date when shown

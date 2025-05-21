@@ -3,22 +3,21 @@
 # UPDATED - Added update_message_in_model slot and reverted ResizeMode
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QPoint, pyqtSignal
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QListView, QAbstractItemView, QSizePolicy,
-    QMenu, QApplication
+    QWidget, QVBoxLayout, QListView, QAbstractItemView, QMenu, QApplication
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QModelIndex, QPoint, pyqtSignal
-from PyQt6.QtGui import QAction
 
 # --- Local Imports ---
 from core.models import ChatMessage, SYSTEM_ROLE, ERROR_ROLE
-from .chat_list_model import ChatListModel, ChatMessageRole
 from .chat_item_delegate import ChatItemDelegate
+from .chat_list_model import ChatListModel, ChatMessageRole
 
 logger = logging.getLogger(__name__)
+
 
 class ChatDisplayArea(QWidget):
     textCopied = pyqtSignal(str, str)
@@ -70,7 +69,8 @@ class ChatDisplayArea(QWidget):
     @pyqtSlot(ChatMessage)
     def add_message_to_model(self, message: ChatMessage):
         # ---- NEW DISTINCT LOG ----
-        logger.error(f"@@@@@@@@ CDA add_message_to_model ENTRY: Role={message.role}, ID={message.id}, Text='{message.text[:100]}...' @@@@@@@@")
+        logger.error(
+            f"@@@@@@@@ CDA add_message_to_model ENTRY: Role={message.role}, ID={message.id}, Text='{message.text[:100]}...' @@@@@@@@")
         # ---- END NEW DISTINCT LOG ----
         logger.debug(f"DisplayArea: Adding message to model (Role: {message.role})")
         if self.chat_list_model:
@@ -85,7 +85,7 @@ class ChatDisplayArea(QWidget):
         if self.chat_list_model:
             self.chat_list_model.updateMessage(index, message)
         else:
-             logger.error("Cannot update message: chat_list_model is None.")
+            logger.error("Cannot update message: chat_list_model is None.")
 
     @pyqtSlot(ChatMessage)
     def start_streaming_in_model(self, initial_message: ChatMessage):
@@ -143,11 +143,13 @@ class ChatDisplayArea(QWidget):
         if message and message.role not in [SYSTEM_ROLE, ERROR_ROLE] and message.text.strip():
             context_menu = QMenu(self)
             copy_action = context_menu.addAction("Copy Message Text")
-            copy_action.triggered.connect(lambda checked=False, msg_text=message.text: self._copy_message_text(msg_text))
+            copy_action.triggered.connect(
+                lambda checked=False, msg_text=message.text: self._copy_message_text(msg_text))
             context_menu.exec(self.chat_list_view.mapToGlobal(pos))
             logger.debug(f"Context menu shown for message role: {message.role}")
         elif message:
-             logger.debug(f"Context menu requested for a message type ({message.role}) that cannot be copied or has no text.")
+            logger.debug(
+                f"Context menu requested for a message type ({message.role}) that cannot be copied or has no text.")
 
     def _copy_message_text(self, text: str):
         try:

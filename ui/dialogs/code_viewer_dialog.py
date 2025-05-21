@@ -2,36 +2,44 @@
 # Contains the CodeViewerWindow class, extracted from the original dialogs.py
 
 import logging
-import os
 from datetime import datetime
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, Dict
 
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot
+from PyQt6.QtGui import QIcon, QFontDatabase, QTextOption
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QSplitter,
     QApplication, QMessageBox, QTreeWidget, QTreeWidgetItem, QWidget
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSlot, QPoint
-from PyQt6.QtGui import QFont, QClipboard, QIcon, QFontDatabase, QTextOption
 
 # --- Local Imports ---
 # Adjust paths based on your final structure
 try:
     # --- MODIFIED IMPORTS ---
-    from utils import constants # Was from ...utils
-    from utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE # Was from ...utils.constants
-    from utils.syntax_highlighter import PythonSyntaxHighlighter # Was from ...utils.syntax_highlighter
-    from ui.widgets import COPY_ICON, CHECK_ICON # Was from ..widgets
+    from utils import constants  # Was from ...utils
+    from utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE  # Was from ...utils.constants
+    from utils.syntax_highlighter import PythonSyntaxHighlighter  # Was from ...utils.syntax_highlighter
+    from ui.widgets import COPY_ICON, CHECK_ICON  # Was from ..widgets
     # --- END MODIFIED IMPORTS ---
 except ImportError as e:
     # Fallback for potential structure issues during refactoring
     logging.error(f"Error importing dependencies in code_viewer_dialog.py: {e}. Check relative paths.")
+
+
     # Define dummy values if needed for the script to be syntactically valid
-    class constants: CHAT_FONT_FAMILY="Arial"; CHAT_FONT_SIZE=10
-    class PythonSyntaxHighlighter: pass # type: ignore
+    class constants:
+        CHAT_FONT_FAMILY = "Arial"; CHAT_FONT_SIZE = 10
+
+
+    class PythonSyntaxHighlighter:
+        pass  # type: ignore
+
+
     COPY_ICON, CHECK_ICON = QIcon(), QIcon()
 
 logger = logging.getLogger(__name__)
+
 
 # --- Code Viewer Window ---
 class CodeViewerWindow(QDialog):
@@ -47,11 +55,11 @@ class CodeViewerWindow(QDialog):
         self.setWindowTitle("Code Viewer")
         self.setObjectName("CodeViewerWindow")
         self.setMinimumSize(700, 500)
-        self.setModal(False) # Non-modal window
+        self.setModal(False)  # Non-modal window
 
         # Store file content associated with tree items {filename: content}
         self._file_contents: Dict[str, str] = {}
-        self._current_filename: Optional[str] = None # Track currently displayed file
+        self._current_filename: Optional[str] = None  # Track currently displayed file
 
         # --- UI Setup ---
         self._init_widgets()
@@ -67,7 +75,7 @@ class CodeViewerWindow(QDialog):
         code_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         code_font.setPointSize(constants.CHAT_FONT_SIZE)
         logger.info(f"CodeViewerWindow using Monospace Font: {code_font.family()} {code_font.pointSize()}pt")
-        self.code_font = code_font # Store for later use if needed
+        self.code_font = code_font  # Store for later use if needed
 
         # Splitter
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -75,27 +83,27 @@ class CodeViewerWindow(QDialog):
         # File Tree (using QTreeWidget)
         self.file_tree = QTreeWidget()
         self.file_tree.setObjectName("CodeFileTree")
-        self.file_tree.setHeaderLabels(["File / Block"]) # Single column header
+        self.file_tree.setHeaderLabels(["File / Block"])  # Single column header
         self.file_tree.setMinimumWidth(200)
-        self.file_tree.header().setStretchLastSection(True) # Header stretches
+        self.file_tree.header().setStretchLastSection(True)  # Header stretches
 
         # Code Editor
         self.code_edit = QTextEdit()
         self.code_edit.setObjectName("CodeViewerEdit")
         self.code_edit.setReadOnly(True)
         self.code_edit.setFont(self.code_font)
-        self.code_edit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap) # Disable line wrapping
-        self.code_edit.setWordWrapMode(QTextOption.WrapMode.NoWrap) # Disable word wrapping
+        self.code_edit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)  # Disable line wrapping
+        self.code_edit.setWordWrapMode(QTextOption.WrapMode.NoWrap)  # Disable word wrapping
 
         # Buttons
         self.copy_button = QPushButton(" Copy Code")
         self.copy_button.setToolTip("Copy the code currently shown")
         if not COPY_ICON.isNull(): self.copy_button.setIcon(COPY_ICON)
-        self.copy_button.setEnabled(False) # Disabled initially
+        self.copy_button.setEnabled(False)  # Disabled initially
 
         self.clear_button = QPushButton("Clear All")
         self.clear_button.setToolTip("Remove all listed files/blocks")
-        self.clear_button.setEnabled(False) # Disabled initially
+        self.clear_button.setEnabled(False)  # Disabled initially
 
         self.close_button = QPushButton("Close")
         self.close_button.setToolTip("Hide this window")
@@ -107,8 +115,8 @@ class CodeViewerWindow(QDialog):
         # Add widgets to splitter
         self.splitter.addWidget(self.file_tree)
         self.splitter.addWidget(self.code_edit)
-        self.splitter.setSizes([220, 480]) # Initial splitter sizes
-        layout.addWidget(self.splitter, 1) # Splitter takes most space
+        self.splitter.setSizes([220, 480])  # Initial splitter sizes
+        layout.addWidget(self.splitter, 1)  # Splitter takes most space
 
         # Button Layout
         button_layout = QHBoxLayout()
@@ -125,7 +133,7 @@ class CodeViewerWindow(QDialog):
         self.file_tree.currentItemChanged.connect(self._display_selected_file_content)
         self.copy_button.clicked.connect(self._copy_selected_code_with_feedback)
         self.clear_button.clicked.connect(self.clear_viewer)
-        self.close_button.clicked.connect(self.hide) # Hide instead of accept/reject
+        self.close_button.clicked.connect(self.hide)  # Hide instead of accept/reject
 
     def _attach_highlighter(self):
         """Attaches the syntax highlighter to the code editor."""
@@ -135,7 +143,7 @@ class CodeViewerWindow(QDialog):
             self.highlighter = PythonSyntaxHighlighter(self.code_edit.document())
             logger.info("CodeViewerWindow: PythonSyntaxHighlighter attached.")
         except Exception as e_hl:
-             logger.error(f"Error attaching PythonSyntaxHighlighter: {e_hl}")
+            logger.error(f"Error attaching PythonSyntaxHighlighter: {e_hl}")
 
     # --- Public Methods ---
     def update_or_add_file(self, filename: str, content: str):
@@ -147,8 +155,8 @@ class CodeViewerWindow(QDialog):
             logger.warning("Attempted to add/update file with empty filename.")
             return
 
-        self._file_contents[filename] = content # Store/update content in the dictionary
-        self.clear_button.setEnabled(True) # Enable clear button once there's content
+        self._file_contents[filename] = content  # Store/update content in the dictionary
+        self.clear_button.setEnabled(True)  # Enable clear button once there's content
 
         # Find existing item in the tree
         found_item = None
@@ -165,15 +173,15 @@ class CodeViewerWindow(QDialog):
             # Trigger display update manually if selection didn't change programmatically
             # This ensures content refreshes if the same item is "updated" again
             if self._current_filename == filename:
-                 self._display_selected_file_content(found_item, None)
+                self._display_selected_file_content(found_item, None)
         else:
             # Item doesn't exist, create a new top-level item
             logger.debug(f"Adding new file to Code Viewer: {filename}")
             new_item = QTreeWidgetItem(self.file_tree)
             new_item.setText(0, filename)
-            new_item.setToolTip(0, filename) # Tooltip is the filename
+            new_item.setToolTip(0, filename)  # Tooltip is the filename
             # No need to store content in item data, we use the dictionary
-            self.file_tree.setCurrentItem(new_item) # Select the new item, triggers display
+            self.file_tree.setCurrentItem(new_item)  # Select the new item, triggers display
 
         # Ensure viewer is visible when updated
         if not self.isVisible():
@@ -191,7 +199,7 @@ class CodeViewerWindow(QDialog):
 
     def clear_viewer(self):
         """Clears all files and code from the viewer."""
-        if not self._file_contents: return # Nothing to clear
+        if not self._file_contents: return  # Nothing to clear
         response = QMessageBox.question(self, "Confirm Clear",
                                         "Remove all items from the Code Viewer?",
                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -207,9 +215,10 @@ class CodeViewerWindow(QDialog):
 
     # --- Private Slots and Helpers ---
     @pyqtSlot(QTreeWidgetItem, QTreeWidgetItem)
-    def _display_selected_file_content(self, current_item: Optional[QTreeWidgetItem], previous_item: Optional[QTreeWidgetItem]):
+    def _display_selected_file_content(self, current_item: Optional[QTreeWidgetItem],
+                                       previous_item: Optional[QTreeWidgetItem]):
         """Displays the code content associated with the selected tree item."""
-        self._reset_copy_button_icon() # Reset icon from previous copy if any
+        self._reset_copy_button_icon()  # Reset icon from previous copy if any
         if current_item is None:
             # No item selected, clear the editor
             self.code_edit.clear()
@@ -217,8 +226,8 @@ class CodeViewerWindow(QDialog):
             self._current_filename = None
             return
 
-        filename = current_item.text(0) # Filename is the text of the item
-        self._current_filename = filename # Track current file
+        filename = current_item.text(0)  # Filename is the text of the item
+        self._current_filename = filename  # Track current file
 
         # Retrieve content from the dictionary
         code_content = self._file_contents.get(filename)
@@ -232,7 +241,7 @@ class CodeViewerWindow(QDialog):
                     self.highlighter.rehighlight()
                 except Exception as e_rh:
                     logger.error(f"Error rehighlighting code for {filename}: {e_rh}")
-            self.copy_button.setEnabled(True) # Enable copy button
+            self.copy_button.setEnabled(True)  # Enable copy button
         else:
             # Should not happen if item exists, but handle defensively
             logger.warning(f"Content not found in dictionary for selected file: {filename}")
@@ -258,7 +267,7 @@ class CodeViewerWindow(QDialog):
             # Provide visual feedback on the button
             if not CHECK_ICON.isNull():
                 self.copy_button.setIcon(CHECK_ICON)
-            self.copy_button.setEnabled(False) # Temporarily disable after copy
+            self.copy_button.setEnabled(False)  # Temporarily disable after copy
             # Reset icon and state after a delay
             QTimer.singleShot(1500, self._reset_copy_button_icon)
         except Exception as e:
@@ -281,7 +290,7 @@ class CodeViewerWindow(QDialog):
             self.file_tree.setCurrentItem(self.file_tree.topLevelItem(0))
         # If an item is already selected, ensure its content is displayed
         elif self.file_tree.currentItem():
-             self._display_selected_file_content(self.file_tree.currentItem(), None)
+            self._display_selected_file_content(self.file_tree.currentItem(), None)
         # Ensure the window is raised and activated
         self.activateWindow()
         self.raise_()
@@ -289,4 +298,4 @@ class CodeViewerWindow(QDialog):
     def closeEvent(self, event):
         """Override close event to hide the dialog instead of destroying it."""
         self.hide()
-        event.ignore() # Prevent the dialog from being destroyed
+        event.ignore()  # Prevent the dialog from being destroyed

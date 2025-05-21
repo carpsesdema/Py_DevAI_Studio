@@ -1,26 +1,16 @@
-
-import sys
-import os
-import re
 import logging
-import base64
-from typing import Optional, List, Dict, Any
-import html
+import os
 
 # --- PyQt6 Imports ---
-from PyQt6.QtWidgets import (
-    QWidget # Keep QWidget if other widgets are added later
-)
 from PyQt6.QtGui import (
-    QFont, QIcon, QPalette, QFontDatabase, QClipboard, QTextOption,
-    QPixmap, QImage
+    QIcon
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QRegularExpression, QTimer, QSize, QByteArray
 
 # --- Local Imports ---
-from utils.constants import ASSETS_PATH # Use constants for paths
+from utils.constants import ASSETS_PATH  # Use constants for paths
 
 logger = logging.getLogger(__name__)
+
 
 # --- Helper to load icons ---
 def load_icon(filename: str) -> QIcon:
@@ -28,11 +18,12 @@ def load_icon(filename: str) -> QIcon:
     path = os.path.join(ASSETS_PATH, filename)
     if not os.path.exists(path):
         logger.warning(f"Icon not found: {path}")
-        return QIcon() # Return empty icon
+        return QIcon()  # Return empty icon
     icon = QIcon(path)
     if icon.isNull():
-         logger.warning(f"Icon loaded but is null: {path}")
+        logger.warning(f"Icon loaded but is null: {path}")
     return icon
+
 
 # --- Icons loaded for external import (e.g., by dialogs.py, left_panel.py) ---
 COPY_ICON = load_icon("copy_icon.svg")

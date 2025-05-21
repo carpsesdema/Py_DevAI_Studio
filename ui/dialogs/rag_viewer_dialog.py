@@ -7,35 +7,43 @@ import os
 from collections import defaultdict
 from typing import Optional, List, Dict, Any
 
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QPoint
+from PyQt6.QtGui import QFont, QIcon, QTextOption
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QSplitter,
     QApplication, QMenu, QLabel, QWidget, QAbstractItemView, QTreeWidget,
     QTreeWidgetItem, QComboBox, QMessageBox
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, pyqtSlot, QPoint
-from PyQt6.QtGui import QFont, QClipboard, QIcon, QTextOption, QAction
 
 # --- Local Imports ---
 # Import necessary components from sibling modules or parent directories
 # Adjust paths based on your final structure if dialogs are moved deeper
 try:
     # --- MODIFIED IMPORTS ---
-    from utils import constants # Was from ...utils
-    from utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE, GLOBAL_COLLECTION_ID # Was from ...utils.constants
-    from services.vector_db_service import VectorDBService # Was from ...services.vector_db_service
-    from ui.widgets import COPY_ICON, CHECK_ICON # Was from ..widgets
+    from utils import constants  # Was from ...utils
+    from utils.constants import CHAT_FONT_FAMILY, CHAT_FONT_SIZE, GLOBAL_COLLECTION_ID  # Was from ...utils.constants
+    from services.vector_db_service import VectorDBService  # Was from ...services.vector_db_service
+    from ui.widgets import COPY_ICON, CHECK_ICON  # Was from ..widgets
     # --- END MODIFIED IMPORTS ---
 except ImportError as e:
     # Fallback for potential structure issues during refactoring
     logging.error(f"Error importing dependencies in rag_viewer_dialog.py: {e}. Check relative paths.")
+
+
     # Define dummy values if needed for the script to be syntactically valid
-    class constants: CHAT_FONT_FAMILY="Arial"; CHAT_FONT_SIZE=10; GLOBAL_COLLECTION_ID="global_collection" # type: ignore
-    class VectorDBService: pass # type: ignore
+    class constants:
+        CHAT_FONT_FAMILY = "Arial"; CHAT_FONT_SIZE = 10; GLOBAL_COLLECTION_ID = "global_collection"  # type: ignore
+
+
+    class VectorDBService:
+        pass  # type: ignore
+
+
     COPY_ICON, CHECK_ICON = QIcon(), QIcon()
 
-
 logger = logging.getLogger(__name__)
+
 
 # --- RAG Viewer Dialog ---
 class RAGViewerDialog(QDialog):
@@ -60,7 +68,7 @@ class RAGViewerDialog(QDialog):
         self.setWindowTitle("RAG Content Viewer")
         self.setObjectName("RAGViewerDialog")
         self.setMinimumSize(800, 600)
-        self.setModal(True) # Keep it modal for now
+        self.setModal(True)  # Keep it modal for now
 
         # Internal state
         self._current_collection_metadata: List[Dict[str, Any]] = []
@@ -111,7 +119,7 @@ class RAGViewerDialog(QDialog):
         if not COPY_ICON.isNull(): self.copy_chunk_button.setIcon(COPY_ICON)
         self.copy_chunk_button.setEnabled(False)
 
-        self.close_button = QPushButton("Close Viewer") # Changed from "Refresh"
+        self.close_button = QPushButton("Close Viewer")  # Changed from "Refresh"
         self.close_button.setToolTip("Close this viewer")
 
     def _init_layout(self):
@@ -129,8 +137,8 @@ class RAGViewerDialog(QDialog):
         # Splitter Layout
         self.splitter.addWidget(self.tree_widget)
         self.splitter.addWidget(self.content_edit)
-        self.splitter.setSizes([450, 350]) # Initial sizes
-        layout.addWidget(self.splitter, 1) # Allow splitter to stretch
+        self.splitter.setSizes([450, 350])  # Initial sizes
+        layout.addWidget(self.splitter, 1)  # Allow splitter to stretch
 
         # Bottom Button Layout
         button_layout = QHBoxLayout()
@@ -147,7 +155,7 @@ class RAGViewerDialog(QDialog):
         self.tree_widget.itemSelectionChanged.connect(self._display_selected_content)
         self.tree_widget.customContextMenuRequested.connect(self._show_rag_item_context_menu)
         self.copy_chunk_button.clicked.connect(self._copy_selected_chunk_with_feedback)
-        self.close_button.clicked.connect(self.accept) # Close dialog
+        self.close_button.clicked.connect(self.accept)  # Close dialog
 
     # --- Context Menu Logic ---
     @pyqtSlot(QPoint)
@@ -158,15 +166,15 @@ class RAGViewerDialog(QDialog):
             return
 
         menu = QMenu(self)
-        paths_to_focus = set() # Use a set to store unique file paths
+        paths_to_focus = set()  # Use a set to store unique file paths
 
         # Collect all unique parent document paths from the selection.
         for item in selected_items:
             is_doc = item.data(0, self.IS_DOCUMENT_ROLE)
             fp = item.data(0, self.FILEPATH_ROLE)
-            if is_doc and fp: # If it's a document item itself
+            if is_doc and fp:  # If it's a document item itself
                 paths_to_focus.add(fp)
-            elif not is_doc: # If it's a chunk item
+            elif not is_doc:  # If it's a chunk item
                 parent = item.parent()
                 if parent:
                     parent_fp = parent.data(0, self.FILEPATH_ROLE)
@@ -187,10 +195,11 @@ class RAGViewerDialog(QDialog):
 
             focus_action = menu.addAction(focus_label_text)
             # Connect to _emit_focus_request with the list of paths
-            focus_action.triggered.connect(lambda checked=False, paths=list(paths_to_focus): self._emit_focus_request(paths))
+            focus_action.triggered.connect(
+                lambda checked=False, paths=list(paths_to_focus): self._emit_focus_request(paths))
 
         # Add "Copy Path" action only if exactly one item is selected (for clarity)
-        item_at_pos = self.tree_widget.itemAt(pos) # Item directly under cursor
+        item_at_pos = self.tree_widget.itemAt(pos)  # Item directly under cursor
         if item_at_pos and len(selected_items) == 1 and item_at_pos == selected_items[0]:
             fp_at_pos = item_at_pos.data(0, self.FILEPATH_ROLE)
             # If it's a chunk, get the parent's path
@@ -213,10 +222,10 @@ class RAGViewerDialog(QDialog):
     def _emit_focus_request(self, paths: List[str]):
         """Emits the focusRequested signal with a list of file paths."""
         if paths and isinstance(paths, list) and all(isinstance(p, str) for p in paths):
-            unique_paths = sorted(list(set(paths))) # Ensure unique and sorted
+            unique_paths = sorted(list(set(paths)))  # Ensure unique and sorted
             logger.info(f"RAG Viewer emitting focus request for paths: {unique_paths}")
             self.focusRequested.emit(unique_paths)
-            self.accept() # Close dialog after setting focus
+            self.accept()  # Close dialog after setting focus
         else:
             logger.warning(f"Invalid paths provided for focus request: {paths}")
 
@@ -241,7 +250,8 @@ class RAGViewerDialog(QDialog):
         logger.debug("Populating RAG collection selector...")
         try:
             self._available_collections = self._vector_db_service.get_available_collections()
-            self._available_collections.sort(key=lambda x: (x != constants.GLOBAL_COLLECTION_ID, x.lower())) # Global first, then alpha
+            self._available_collections.sort(
+                key=lambda x: (x != constants.GLOBAL_COLLECTION_ID, x.lower()))  # Global first, then alpha
         except Exception as e:
             logger.exception("Error getting available RAG collections.")
             self._available_collections = []
@@ -259,11 +269,12 @@ class RAGViewerDialog(QDialog):
             for i, cid in enumerate(self._available_collections):
                 # Display "Global" for the global collection ID, otherwise use the ID itself
                 display_name = "Global" if cid == constants.GLOBAL_COLLECTION_ID else cid
-                self.collection_selector.addItem(display_name, cid) # Store actual CID in UserRole data
-                if cid == constants.GLOBAL_COLLECTION_ID: # Select Global by default
+                self.collection_selector.addItem(display_name, cid)  # Store actual CID in UserRole data
+                if cid == constants.GLOBAL_COLLECTION_ID:  # Select Global by default
                     default_idx = i
             self.collection_selector.setCurrentIndex(default_idx)
-            logger.info(f"Populated RAG selector. Selected: '{self.collection_selector.currentText()}' (CID: {self.collection_selector.itemData(default_idx)})")
+            logger.info(
+                f"Populated RAG selector. Selected: '{self.collection_selector.currentText()}' (CID: {self.collection_selector.itemData(default_idx)})")
 
         self.collection_selector.blockSignals(False)
 
@@ -273,7 +284,6 @@ class RAGViewerDialog(QDialog):
         else:
             # Ensure tree is cleared if no collections exist
             self._populate_tree_widget("")
-
 
     @pyqtSlot(int)
     def _load_selected_collection_data(self, index: int):
@@ -294,25 +304,25 @@ class RAGViewerDialog(QDialog):
 
         # Validate the retrieved collection ID
         if not isinstance(selected_cid, str):
-             # Handle cases like the "No collections available" item
+            # Handle cases like the "No collections available" item
             if selected_cid is None and self.collection_selector.itemText(index) == "No collections available":
-                 logger.warning("No RAG collections available to load.")
-                 self.info_label.setText("No RAG collections available.")
+                logger.warning("No RAG collections available to load.")
+                self.info_label.setText("No RAG collections available.")
             else:
-                 logger.error(f"Invalid collection ID type for index {index}. Data: '{selected_cid}' (Type: {type(selected_cid)})")
-                 self.info_label.setText("Error: Invalid collection selected.")
-            self._populate_tree_widget("") # Ensure tree is cleared
+                logger.error(
+                    f"Invalid collection ID type for index {index}. Data: '{selected_cid}' (Type: {type(selected_cid)})")
+                self.info_label.setText("Error: Invalid collection selected.")
+            self._populate_tree_widget("")  # Ensure tree is cleared
             return
         # Empty string represents the Global collection internally if needed, but should have GLOBAL_COLLECTION_ID
         if not selected_cid.strip() and selected_cid != constants.GLOBAL_COLLECTION_ID:
-             logger.error(f"Empty or invalid collection ID string for index {index}.")
-             self.info_label.setText("Error: Invalid collection ID.")
-             self._populate_tree_widget("") # Ensure tree is cleared
-             return
-
+            logger.error(f"Empty or invalid collection ID string for index {index}.")
+            self.info_label.setText("Error: Invalid collection ID.")
+            self._populate_tree_widget("")  # Ensure tree is cleared
+            return
 
         logger.info(f"Loading data for RAG collection: '{selected_cid}'")
-        display_name = self.collection_selector.itemText(index) # Get display name for UI
+        display_name = self.collection_selector.itemText(index)  # Get display name for UI
 
         try:
             if self._vector_db_service.is_ready(selected_cid):
@@ -323,11 +333,11 @@ class RAGViewerDialog(QDialog):
             else:
                 self.info_label.setText(f"Collection '{display_name}' - Not ready or empty.")
                 logger.warning(f"Cannot load metadata for collection '{selected_cid}': Service reports not ready.")
-                self._populate_tree_widget(selected_cid) # Populate (which will show empty)
+                self._populate_tree_widget(selected_cid)  # Populate (which will show empty)
         except Exception as e:
             logger.exception(f"Error loading metadata for collection '{selected_cid}': {e}")
             self.info_label.setText(f"Error loading collection '{display_name}'.")
-            self._populate_tree_widget(selected_cid) # Populate (which will show empty)
+            self._populate_tree_widget(selected_cid)  # Populate (which will show empty)
 
     def _populate_tree_widget(self, current_cid: str):
         """Populates the tree widget with documents and chunks."""
@@ -345,18 +355,19 @@ class RAGViewerDialog(QDialog):
             if isinstance(meta, dict):
                 # Use 'source' key, default to 'Unknown_Source' if missing
                 source = meta.get("source", "Unknown_Source")
-                docs[source].append(i) # Store the index in the metadata list
+                docs[source].append(i)  # Store the index in the metadata list
             else:
-                logger.warning(f"Skipping invalid metadata item at index {i} in collection '{current_cid}'. Type: {type(meta)}")
+                logger.warning(
+                    f"Skipping invalid metadata item at index {i} in collection '{current_cid}'. Type: {type(meta)}")
 
         # Populate the tree
         for source, chunk_indices in sorted(docs.items()):
             filename_display = os.path.basename(source) if source and source != "Unknown_Source" else "Unknown_Source"
             doc_item = QTreeWidgetItem(self.tree_widget)
-            doc_item.setText(0, filename_display) # Column 0: Filename
-            doc_item.setText(1, current_cid)      # Column 1: Collection ID
-            doc_item.setText(2, f"{len(chunk_indices)} chunks") # Column 2: Chunk count
-            doc_item.setToolTip(0, source)        # Tooltip shows full path
+            doc_item.setText(0, filename_display)  # Column 0: Filename
+            doc_item.setText(1, current_cid)  # Column 1: Collection ID
+            doc_item.setText(2, f"{len(chunk_indices)} chunks")  # Column 2: Chunk count
+            doc_item.setToolTip(0, source)  # Tooltip shows full path
 
             # Store data roles for identification and path retrieval
             doc_item.setData(0, self.IS_DOCUMENT_ROLE, True)
@@ -366,9 +377,10 @@ class RAGViewerDialog(QDialog):
             # Add child items for each chunk
             for metadata_list_index in sorted(chunk_indices):
                 # Check if index is valid and metadata is a dictionary
-                if 0 <= metadata_list_index < len(self._current_collection_metadata) and isinstance(self._current_collection_metadata[metadata_list_index], dict):
+                if 0 <= metadata_list_index < len(self._current_collection_metadata) and isinstance(
+                        self._current_collection_metadata[metadata_list_index], dict):
                     meta_chunk = self._current_collection_metadata[metadata_list_index]
-                    chunk_display_index = meta_chunk.get("chunk_index", "?") # Index within its original file
+                    chunk_display_index = meta_chunk.get("chunk_index", "?")  # Index within its original file
                     start_char_index = meta_chunk.get("start_index", "?")
 
                     chunk_label = f"Chunk {chunk_display_index}"
@@ -378,26 +390,27 @@ class RAGViewerDialog(QDialog):
                         chunk_details += f", Lines: {meta_chunk['start_line']}-{meta_chunk['end_line']}"
 
                     chunk_item = QTreeWidgetItem(doc_item)
-                    chunk_item.setText(0, chunk_label) # Column 0: Chunk Label
-                    chunk_item.setText(1, "")          # Column 1: Empty for chunk
-                    chunk_item.setText(2, chunk_details) # Column 2: Chunk details
+                    chunk_item.setText(0, chunk_label)  # Column 0: Chunk Label
+                    chunk_item.setText(1, "")  # Column 1: Empty for chunk
+                    chunk_item.setText(2, chunk_details)  # Column 2: Chunk details
                     chunk_item.setToolTip(0, f"Chunk {chunk_display_index} from {filename_display}")
 
                     # Store data roles for identification and metadata index
                     chunk_item.setData(0, self.IS_DOCUMENT_ROLE, False)
-                    chunk_item.setData(0, self.CHUNK_INDEX_ROLE, metadata_list_index) # Store index within the metadata list
-                    chunk_item.setData(0, self.COLLECTION_ID_ROLE, current_cid) # Store collection ID
+                    chunk_item.setData(0, self.CHUNK_INDEX_ROLE,
+                                       metadata_list_index)  # Store index within the metadata list
+                    chunk_item.setData(0, self.COLLECTION_ID_ROLE, current_cid)  # Store collection ID
                 else:
-                    logger.warning(f"Invalid metadata or index ({metadata_list_index}) found for document '{source}' in collection '{current_cid}'. Skipping chunk item.")
+                    logger.warning(
+                        f"Invalid metadata or index ({metadata_list_index}) found for document '{source}' in collection '{current_cid}'. Skipping chunk item.")
 
-            doc_item.setExpanded(False) # Collapse documents by default
+            doc_item.setExpanded(False)  # Collapse documents by default
 
         logger.info(f"RAGViewer tree populated for collection '{current_cid}' with {len(docs)} documents.")
 
-
     def _display_selected_content(self):
         """Displays content based on the first selected item in the tree."""
-        self._reset_copy_button_icon() # Reset copy button state
+        self._reset_copy_button_icon()  # Reset copy button state
         selected_items = self.tree_widget.selectedItems()
         if not selected_items:
             self.content_edit.clear()
@@ -408,7 +421,7 @@ class RAGViewerDialog(QDialog):
         item_to_display = selected_items[0]
 
         is_doc = item_to_display.data(0, self.IS_DOCUMENT_ROLE)
-        chunk_metadata_idx = item_to_display.data(0, self.CHUNK_INDEX_ROLE) # Index in _current_collection_metadata
+        chunk_metadata_idx = item_to_display.data(0, self.CHUNK_INDEX_ROLE)  # Index in _current_collection_metadata
         collection_id_of_item = item_to_display.data(0, self.COLLECTION_ID_ROLE)
 
         if is_doc:
@@ -422,31 +435,33 @@ class RAGViewerDialog(QDialog):
                 f"Chunks: {num_chunks}\n\n"
                 "(Select a specific chunk to view its content or right-click to set focus)"
             )
-            self.copy_chunk_button.setEnabled(False) # Cannot copy document info
+            self.copy_chunk_button.setEnabled(False)  # Cannot copy document info
         elif chunk_metadata_idx is not None and 0 <= chunk_metadata_idx < len(self._current_collection_metadata):
             # Display chunk content if a chunk node is selected
             metadata = self._current_collection_metadata[chunk_metadata_idx]
             if isinstance(metadata, dict):
                 content = metadata.get("content", "[Content not found in metadata]")
                 self.content_edit.setPlainText(content)
-                self.copy_chunk_button.setEnabled(bool(content)) # Enable copy only if content exists
+                self.copy_chunk_button.setEnabled(bool(content))  # Enable copy only if content exists
             else:
                 # Handle case where metadata at the index is invalid
                 self.content_edit.setPlainText("[Error: Invalid metadata format for this chunk]")
                 self.copy_chunk_button.setEnabled(False)
-                logger.error(f"Invalid metadata format at index {chunk_metadata_idx} for collection '{collection_id_of_item}'")
+                logger.error(
+                    f"Invalid metadata format at index {chunk_metadata_idx} for collection '{collection_id_of_item}'")
         else:
             # Handle unexpected selection state
             self.content_edit.clear()
             self.copy_chunk_button.setEnabled(False)
-            logger.warning(f"Invalid item selection state for display. IsDoc: {is_doc}, ChunkMetaIdx: {chunk_metadata_idx}")
+            logger.warning(
+                f"Invalid item selection state for display. IsDoc: {is_doc}, ChunkMetaIdx: {chunk_metadata_idx}")
 
     def _copy_selected_chunk_with_feedback(self):
         """Copies the content of the selected chunk (first selected if multiple)."""
         selected_items = self.tree_widget.selectedItems()
         if not selected_items: return
 
-        item_to_copy = selected_items[0] # Base copy action on the first selected item
+        item_to_copy = selected_items[0]  # Base copy action on the first selected item
         is_doc = item_to_copy.data(0, self.IS_DOCUMENT_ROLE)
         chunk_metadata_idx = item_to_copy.data(0, self.CHUNK_INDEX_ROLE)
 
@@ -468,7 +483,7 @@ class RAGViewerDialog(QDialog):
                         # Provide visual feedback
                         if not CHECK_ICON.isNull(): self.copy_chunk_button.setIcon(CHECK_ICON)
                         self.copy_chunk_button.setEnabled(False)
-                        QTimer.singleShot(1500, self._reset_copy_button_icon) # Reset after 1.5 seconds
+                        QTimer.singleShot(1500, self._reset_copy_button_icon)  # Reset after 1.5 seconds
                     else:
                         logger.error("Could not access clipboard.")
                         QMessageBox.warning(self, "Copy Error", "Could not access system clipboard.")

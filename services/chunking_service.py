@@ -1,18 +1,18 @@
 # services/chunking_service.py
 # UPDATED FILE - Added start_line and end_line calculation to chunk metadata
 
-import os
+import bisect  # Using bisect for efficient line number lookup
 import logging
-import bisect # Using bisect for efficient line number lookup
+import os
 from typing import List, Dict, Any
 
 # --- LangChain imports ---
-from langchain_text_splitters import RecursiveCharacterTextSplitter, Language, PythonCodeTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter, PythonCodeTextSplitter
 
 # --- Local Imports ---
-from utils import constants
 
 logger = logging.getLogger(__name__)
+
 
 class ChunkingService:
     """
@@ -27,9 +27,10 @@ class ChunkingService:
             logger.warning(f"Invalid chunk_size ({chunk_size}), using fallback: {fallback_size}")
             chunk_size = fallback_size
         if not isinstance(chunk_overlap, int) or chunk_overlap < 0 or chunk_overlap >= chunk_size:
-             fallback_overlap = int(chunk_size * 0.15) # 15% overlap as fallback
-             logger.warning(f"Invalid chunk_overlap ({chunk_overlap}) for chunk_size {chunk_size}, using fallback: {fallback_overlap}")
-             chunk_overlap = fallback_overlap
+            fallback_overlap = int(chunk_size * 0.15)  # 15% overlap as fallback
+            logger.warning(
+                f"Invalid chunk_overlap ({chunk_overlap}) for chunk_size {chunk_size}, using fallback: {fallback_overlap}")
+            chunk_overlap = fallback_overlap
 
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -41,7 +42,8 @@ class ChunkingService:
             chunk_overlap=self.chunk_overlap,
             length_function=len,
         )
-        logger.info(f"Using LangChain RecursiveCharacterTextSplitter (size={self.chunk_size}, overlap={self.chunk_overlap}) as default.")
+        logger.info(
+            f"Using LangChain RecursiveCharacterTextSplitter (size={self.chunk_size}, overlap={self.chunk_overlap}) as default.")
 
         # 2. Python Code Splitter
         try:
@@ -50,15 +52,16 @@ class ChunkingService:
                 chunk_overlap=self.chunk_overlap
                 # PythonCodeTextSplitter automatically uses appropriate Python separators
             )
-            logger.info(f"Initialized LangChain PythonCodeTextSplitter (size={self.chunk_size}, overlap={self.chunk_overlap}).")
+            logger.info(
+                f"Initialized LangChain PythonCodeTextSplitter (size={self.chunk_size}, overlap={self.chunk_overlap}).")
         except Exception as e:
-            logger.error(f"Failed to initialize PythonCodeTextSplitter: {e}. Falling back to recursive for Python.", exc_info=True)
-            self.python_splitter = None # Mark as unavailable if init fails
-
+            logger.error(f"Failed to initialize PythonCodeTextSplitter: {e}. Falling back to recursive for Python.",
+                         exc_info=True)
+            self.python_splitter = None  # Mark as unavailable if init fails
 
     def _get_line_start_indices(self, text: str) -> List[int]:
         """Calculates the starting character index of each line."""
-        indices = [0] # Line 1 starts at index 0
+        indices = [0]  # Line 1 starts at index 0
         current_pos = 0
         while True:
             next_newline = text.find('\n', current_pos)
@@ -73,7 +76,7 @@ class ChunkingService:
         # bisect_right finds the insertion point to maintain sorted order.
         # The insertion point corresponds to the line number (add 1 for 1-based index).
         line_num_0_based = bisect.bisect_right(line_start_indices, char_index) - 1
-        return max(1, line_num_0_based + 1) # Ensure minimum line number is 1
+        return max(1, line_num_0_based + 1)  # Ensure minimum line number is 1
 
     def chunk_document(self, content: str, source_id: str, file_ext: str) -> List[Dict[str, Any]]:
         """
@@ -101,15 +104,16 @@ class ChunkingService:
             logger.debug(f"Using PythonCodeTextSplitter for '{filename_base}'")
             splitter_to_use = self.python_splitter
         else:
-            if file_ext == '.py': # Log fallback specifically for Python if splitter failed init
-                 logger.warning(f"PythonCodeTextSplitter not available, falling back to RecursiveCharacterTextSplitter for '{filename_base}'.")
+            if file_ext == '.py':  # Log fallback specifically for Python if splitter failed init
+                logger.warning(
+                    f"PythonCodeTextSplitter not available, falling back to RecursiveCharacterTextSplitter for '{filename_base}'.")
             logger.debug(f"Using default RecursiveCharacterTextSplitter for '{filename_base}'")
             splitter_to_use = self.recursive_splitter
         # ------------------------------------
 
-        if splitter_to_use is None: # Should not happen if recursive_splitter is always initialized
-             logger.error(f"No valid text splitter available for '{filename_base}'. Cannot chunk.")
-             return []
+        if splitter_to_use is None:  # Should not happen if recursive_splitter is always initialized
+            logger.error(f"No valid text splitter available for '{filename_base}'. Cannot chunk.")
+            return []
 
         try:
             # --- Pre-calculate line start indices ---
@@ -117,18 +121,19 @@ class ChunkingService:
             logger.debug(f"Calculated {len(line_start_indices)} line start indices for '{filename_base}'.")
             # ---------------------------------------
 
-            logger.debug(f"Splitting text for '{filename_base}' (length: {len(content)}) using {type(splitter_to_use).__name__}")
+            logger.debug(
+                f"Splitting text for '{filename_base}' (length: {len(content)}) using {type(splitter_to_use).__name__}")
             split_texts = splitter_to_use.split_text(content)
             logger.debug(f"Split into {len(split_texts)} chunks for '{filename_base}'")
 
             # --- Format output ---
             chunks = []
-            current_pos = 0 # Track position in original content for approximate start_index search
+            current_pos = 0  # Track position in original content for approximate start_index search
 
             for i, text_chunk in enumerate(split_texts):
-                if not text_chunk.strip(): # Skip empty chunks if splitter produces them
-                     logger.debug(f"Skipping empty chunk {i} for '{filename_base}'")
-                     continue
+                if not text_chunk.strip():  # Skip empty chunks if splitter produces them
+                    logger.debug(f"Skipping empty chunk {i} for '{filename_base}'")
+                    continue
 
                 # --- Find approximate character start/end indices ---
                 chunk_start_in_original = -1
@@ -136,7 +141,7 @@ class ChunkingService:
                 try:
                     chunk_start_in_original = content.find(text_chunk, current_pos)
                 except Exception:
-                    pass # Ignore potential errors in find
+                    pass  # Ignore potential errors in find
 
                 if chunk_start_in_original == -1:
                     # Fallback: search from the beginning (less accurate with identical chunks)
@@ -146,9 +151,10 @@ class ChunkingService:
                         pass
 
                 if chunk_start_in_original == -1:
-                     # If still not found, use the previous position as a rough estimate
-                     chunk_start_in_original = current_pos
-                     logger.warning(f"Could not reliably find start index for chunk {i} of '{filename_base}'. Using estimated position {current_pos}.")
+                    # If still not found, use the previous position as a rough estimate
+                    chunk_start_in_original = current_pos
+                    logger.warning(
+                        f"Could not reliably find start index for chunk {i} of '{filename_base}'. Using estimated position {current_pos}.")
 
                 chunk_end_in_original = chunk_start_in_original + len(text_chunk)
                 # ----------------------------------------------------
@@ -163,11 +169,11 @@ class ChunkingService:
                 metadata = {
                     "source": str(source_id),
                     "filename": filename_base,
-                    "chunk_index": i, # Index of the chunk within this document
-                    "start_index": chunk_start_in_original, # Approximate start char index
-                    "content": text_chunk, # IMPORTANT: Store original chunk content in metadata for DB lookup/display
-                    "start_line": start_line, # <-- ADDED
-                    "end_line": end_line, # <-- ADDED
+                    "chunk_index": i,  # Index of the chunk within this document
+                    "start_index": chunk_start_in_original,  # Approximate start char index
+                    "content": text_chunk,  # IMPORTANT: Store original chunk content in metadata for DB lookup/display
+                    "start_line": start_line,  # <-- ADDED
+                    "end_line": end_line,  # <-- ADDED
                 }
                 chunks.append({"content": text_chunk, "metadata": metadata})
 
@@ -175,9 +181,10 @@ class ChunkingService:
                 # Add a small increment to handle potential overlaps correctly
                 current_pos = chunk_start_in_original + 1
 
-            logger.info(f"{type(splitter_to_use).__name__} created {len(chunks)} non-empty chunks for {filename_base} (with line numbers)")
+            logger.info(
+                f"{type(splitter_to_use).__name__} created {len(chunks)} non-empty chunks for {filename_base} (with line numbers)")
             return chunks
 
         except Exception as e:
             logger.exception(f"Error using {type(splitter_to_use).__name__} for {filename_base}: {e}")
-            return [] # Return empty list on error
+            return []  # Return empty list on error

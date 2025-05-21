@@ -1,11 +1,11 @@
 # SynChat/config.py
 # UPDATED FILE
-import os
 import logging
+import os
 import sys
-
-import dotenv # Ensure dotenv is imported if load_dotenv is used
 from typing import Optional
+
+import dotenv  # Ensure dotenv is imported if load_dotenv is used
 
 logger = logging.getLogger(__name__)
 
@@ -44,25 +44,27 @@ def load_config() -> dict:
                 logger.info("GEMINI_API_KEY loaded successfully from .env.")
         except Exception as e:
             logger.exception(f"Error loading .env file at {dotenv_path_to_load}: {e}")
-            config['GEMINI_API_KEY'] = None # Ensure key is None on error
+            config['GEMINI_API_KEY'] = None  # Ensure key is None on error
     else:
-        logger.warning(f".env file not found at expected location: {dotenv_path_to_load}. Checking environment variables as fallback.")
+        logger.warning(
+            f".env file not found at expected location: {dotenv_path_to_load}. Checking environment variables as fallback.")
         # Check environment variables as fallback if .env is missing
         config['GEMINI_API_KEY'] = os.getenv("GEMINI_API_KEY")
         if not config['GEMINI_API_KEY']:
             logger.warning("GEMINI_API_KEY not found in environment variables either.")
         else:
-             logger.info("GEMINI_API_KEY loaded from environment variables.")
-
+            logger.info("GEMINI_API_KEY loaded from environment variables.")
 
     # Add other configuration loading here if needed (e.g., from JSON/YAML)
     # config['DEFAULT_MODEL'] = ...
 
     return config
 
+
 # Load config once on import
 # This ensures load_config runs with the corrected paths when the module loads.
 APP_CONFIG = load_config()
+
 
 def get_api_key() -> Optional[str]:
     """Returns the loaded Gemini API key."""

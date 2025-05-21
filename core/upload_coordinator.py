@@ -1,11 +1,10 @@
 # core/upload_coordinator.py
-import logging
 import asyncio
+import logging
 import os
-import re
 from typing import List, Optional, Callable, TYPE_CHECKING
 
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal
 
 try:
     from .models import ChatMessage, SYSTEM_ROLE, ERROR_ROLE
@@ -28,6 +27,7 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
+
 # The AUTO_SUMMARY_TRIGGER_THRESHOLD_FILES constant logic has been removed.
 # If this was its only use, the constant can be removed from utils/constants.py.
 
@@ -40,7 +40,7 @@ class UploadCoordinator(QObject):
     def __init__(self,
                  upload_service: UploadService,
                  project_context_manager: ProjectContextManager,
-                 project_summary_coordinator: Optional['ProjectSummaryCoordinator'], # Remains for manual summary
+                 project_summary_coordinator: Optional['ProjectSummaryCoordinator'],  # Remains for manual summary
                  parent: Optional[QObject] = None):
         super().__init__(parent)
         if not upload_service:
@@ -50,14 +50,15 @@ class UploadCoordinator(QObject):
 
         self._upload_service = upload_service
         self._project_context_manager = project_context_manager
-        self._project_summary_coordinator = project_summary_coordinator # Keep for manual summary
+        self._project_summary_coordinator = project_summary_coordinator  # Keep for manual summary
         self._current_upload_task: Optional[asyncio.Task] = None
         self._is_busy: bool = False
 
         if self._project_summary_coordinator:
             logger.info("UploadCoordinator initialized with ProjectSummaryCoordinator (for manual summaries).")
         else:
-            logger.warning("UploadCoordinator initialized WITHOUT ProjectSummaryCoordinator. Manual summary command will not function.")
+            logger.warning(
+                "UploadCoordinator initialized WITHOUT ProjectSummaryCoordinator. Manual summary command will not function.")
         logger.info("UploadCoordinator initialized.")
 
     def _set_busy(self, busy: bool):
@@ -70,8 +71,8 @@ class UploadCoordinator(QObject):
             self,
             upload_func: Callable[[], Optional[ChatMessage]],
             operation_description: str,
-            target_collection_id: Optional[str] = None, # Still useful for logging/context
-            num_items_for_upload: int = 0 # Still useful for logging/context
+            target_collection_id: Optional[str] = None,  # Still useful for logging/context
+            num_items_for_upload: int = 0  # Still useful for logging/context
     ):
         logger.info(f"UploadCoordinator: Starting async task for: {operation_description}")
         summary_message: Optional[ChatMessage] = None
@@ -107,8 +108,8 @@ class UploadCoordinator(QObject):
                          description: str,
                          is_global: bool,
                          item_info: str,
-                         target_collection_id_for_summary: Optional[str] = None, # Keep for context
-                         num_items_for_upload: int = 0 # Keep for context
+                         target_collection_id_for_summary: Optional[str] = None,  # Keep for context
+                         num_items_for_upload: int = 0  # Keep for context
                          ):
         if self._is_busy:
             logger.warning("UploadCoordinator is already busy. Ignoring new upload request.")

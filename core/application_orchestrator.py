@@ -2,11 +2,17 @@
 import logging
 from typing import Dict, Optional
 
-from backend.interface import BackendInterface
 from backend.gemini_adapter import GeminiAdapter
-from backend.ollama_adapter import OllamaAdapter
 from backend.gpt_adapter import GPTAdapter
-
+from backend.interface import BackendInterface
+from backend.ollama_adapter import OllamaAdapter
+from core.backend_coordinator import BackendCoordinator
+from core.project_context_manager import ProjectContextManager
+from core.rag_handler import RagHandler
+from core.session_flow_manager import SessionFlowManager
+from core.upload_coordinator import UploadCoordinator
+from core.user_input_handler import UserInputHandler
+from core.user_input_processor import UserInputProcessor
 from utils.constants import (
     DEFAULT_CHAT_BACKEND_ID,
     OLLAMA_CHAT_BACKEND_ID,
@@ -15,20 +21,12 @@ from utils.constants import (
     GENERATOR_BACKEND_ID
 )
 
-from core.project_context_manager import ProjectContextManager
-from core.backend_coordinator import BackendCoordinator
-from core.session_flow_manager import SessionFlowManager
-from core.upload_coordinator import UploadCoordinator
-from core.rag_handler import RagHandler
-from core.user_input_processor import UserInputProcessor
-from core.user_input_handler import UserInputHandler
-
 try:
     from core.modification_handler import ModificationHandler
 
     MOD_HANDLER_AVAILABLE = True
 except ImportError as e:
-    ModificationHandler = None
+    ModificationHandler = None  # type: ignore
     MOD_HANDLER_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import ModificationHandler: {e}.")
 
@@ -37,8 +35,8 @@ try:
 
     MOD_COORDINATOR_AVAILABLE = True
 except ImportError as e:
-    ModificationCoordinator = None
-    ModPhase = None
+    ModificationCoordinator = None  # type: ignore
+    ModPhase = None  # type: ignore
     MOD_COORDINATOR_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import ModificationCoordinator or ModPhase: {e}.")
 
@@ -47,7 +45,7 @@ try:
 
     PROJECT_INTEL_SERVICE_AVAILABLE = True
 except ImportError as e:
-    ProjectIntelligenceService = None
+    ProjectIntelligenceService = None  # type: ignore
     PROJECT_INTEL_SERVICE_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import ProjectIntelligenceService: {e}.")
 
@@ -56,13 +54,24 @@ try:
 
     PROJECT_SUMMARY_COORDINATOR_AVAILABLE = True
 except ImportError as e:
-    ProjectSummaryCoordinator = None
+    ProjectSummaryCoordinator = None  # type: ignore
     PROJECT_SUMMARY_COORDINATOR_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import ProjectSummaryCoordinator: {e}.")
 
 from services.session_service import SessionService
 from services.upload_service import UploadService
 from services.vector_db_service import VectorDBService
+
+# --- ADD IMPORT FOR THE NEW LOGGER ---
+try:
+    from services.llm_communication_logger import LlmCommunicationLogger
+
+    LLM_COMM_LOGGER_AVAILABLE = True
+except ImportError as e:
+    LlmCommunicationLogger = None  # type: ignore
+    LLM_COMM_LOGGER_AVAILABLE = False
+    logging.error(f"ApplicationOrchestrator: Failed to import LlmCommunicationLogger: {e}")
+# --- END IMPORT ---
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +103,19 @@ class ApplicationOrchestrator:
         self.project_context_manager = ProjectContextManager()
 
         self.backend_coordinator = BackendCoordinator(self._all_backend_adapters_dict)
+
+        # --- INSTANTIATE LlmCommunicationLogger ---
+        self.llm_communication_logger: Optional[LlmCommunicationLogger] = None
+        if LLM_COMM_LOGGER_AVAILABLE and LlmCommunicationLogger is not None:
+            try:
+                self.llm_communication_logger = LlmCommunicationLogger()
+                logger.info("ApplicationOrchestrator: LlmCommunicationLogger instantiated.")
+            except Exception as e:
+                logger.error(f"ApplicationOrchestrator: Failed to instantiate LlmCommunicationLogger: {e}",
+                             exc_info=True)
+        else:
+            logger.warning("ApplicationOrchestrator: LlmCommunicationLogger not available or not imported.")
+        # --- END INSTANTIATION ---
 
         self.rag_handler: Optional[RagHandler] = None
         if self._upload_service and self._vector_db_service:
@@ -134,7 +156,8 @@ class ApplicationOrchestrator:
                     modification_handler=self.modification_handler_instance,
                     backend_coordinator=self.backend_coordinator,
                     project_context_manager=self.project_context_manager,
-                    rag_handler=self.rag_handler
+                    rag_handler=self.rag_handler,
+                    llm_comm_logger=self.llm_communication_logger  # <-- PASS THE LOGGER HERE
                 )
             except Exception as e:
                 logger.error(f"ApplicationOrchestrator: Failed to instantiate ModificationCoordinator: {e}",
@@ -254,3 +277,8 @@ class ApplicationOrchestrator:
 
     def get_project_intelligence_service(self) -> Optional[ProjectIntelligenceService]:
         return self.project_intelligence_service
+
+    # --- ADD GETTER FOR THE LOGGER ---
+    def get_llm_communication_logger(self) -> Optional[LlmCommunicationLogger]:
+        return self.llm_communication_logger
+    # --- END GETTER ---

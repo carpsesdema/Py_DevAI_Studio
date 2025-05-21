@@ -1,4 +1,5 @@
 # ui/main_window.py
+# CORRECTED - Fixed _handle_new_session_for_active_tab connection
 import logging
 import os
 import re
@@ -23,6 +24,7 @@ try:
     from .chat_tab_manager import ChatTabManager
     from utils import constants
     from core.modification_coordinator import ModPhase
+    from services.llm_communication_logger import LlmCommunicationLogger
 except ImportError as e:
     logging.basicConfig(level=logging.DEBUG)
     logging.critical(f"CRITICAL IMPORT ERROR in main_window.py: {e}", exc_info=True)
@@ -54,6 +56,11 @@ class MainWindow(QWidget):
         self.dialog_service: Optional[DialogService] = None
         self.main_tab_widget: Optional[QTabWidget] = None
         self.chat_tab_manager: Optional[ChatTabManager] = None
+        self._llm_comm_logger_instance: Optional[LlmCommunicationLogger] = None
+        if self.chat_manager:
+            self._llm_comm_logger_instance = self.chat_manager.get_llm_communication_logger()
+            if not self._llm_comm_logger_instance:
+                logger.error("MainWindow: Failed to get LlmCommunicationLogger from ChatManager during init.")
 
         self._last_token_display_str: Optional[str] = None
         self._current_base_status_text: str = "Status: Initializing..."
@@ -63,7 +70,7 @@ class MainWindow(QWidget):
             self.dialog_service = DialogService(self, self.chat_manager)
         except Exception as e:
             logger.critical(f"Failed to initialize DialogService: {e}", exc_info=True)
-            QApplication.quit()
+            QApplication.quit();  # type: ignore
             return
 
         self._init_ui()
@@ -73,11 +80,11 @@ class MainWindow(QWidget):
                 self.chat_tab_manager = ChatTabManager(self.main_tab_widget, self.chat_manager, self)
             except Exception as e:
                 logger.critical(f"Failed to initialize ChatTabManager: {e}", exc_info=True)
-                QApplication.quit()
+                QApplication.quit();  # type: ignore
                 return
         else:
             logger.critical("main_tab_widget is None after _init_ui. Cannot initialize ChatTabManager.")
-            QApplication.quit()
+            QApplication.quit();  # type: ignore
             return
 
         self._apply_styles()
@@ -88,7 +95,7 @@ class MainWindow(QWidget):
     def _setup_window(self):
         self.setWindowTitle(constants.APP_NAME)
         try:
-            app_icon_path = os.path.join(constants.ASSETS_PATH, "Synchat.ico")  # Make sure Synchat.ico is in assets
+            app_icon_path = os.path.join(constants.ASSETS_PATH, "Synchat.ico")
             std_fallback_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
             app_icon = QIcon(app_icon_path) if os.path.exists(app_icon_path) else std_fallback_icon
             if not app_icon.isNull():
@@ -176,18 +183,20 @@ class MainWindow(QWidget):
     def _connect_signals(self):
         logger.debug("MainWindow: Connecting signals...")
         if not all([self.chat_manager, self.left_panel, self.dialog_service, self.chat_tab_manager]):
-            logger.critical("Cannot connect signals: Crucial components missing.")
+            logger.critical("Cannot connect signals: Crucial components missing.");
             return
 
         lp = self.left_panel
-        lp.newSessionClicked.connect(self._handle_new_session_for_active_tab)
+        # --- CORRECTED CONNECTION for newSessionClicked ---
+        lp.newSessionClicked.connect(self.chat_manager.start_new_chat)
+        # --- END CORRECTION ---
         lp.manageSessionsClicked.connect(self._show_session_manager)
         lp.uploadFileClicked.connect(self._trigger_file_upload)
         lp.uploadDirectoryClicked.connect(self._trigger_dir_upload)
         lp.editPersonalityClicked.connect(self._show_personality_editor)
         lp.viewCodeBlocksClicked.connect(self._show_code_viewer)
         lp.viewRagContentClicked.connect(self._show_rag_viewer)
-        lp.viewLlmTerminalClicked.connect(self._show_llm_terminal_window)  # <-- CONNECT NEW BUTTON
+        lp.viewLlmTerminalClicked.connect(self._show_llm_terminal_window_slot)
         lp.newProjectClicked.connect(self._handle_new_project_request)
         lp.uploadGlobalClicked.connect(self._trigger_global_upload_menu)
         lp.projectSelected.connect(self.chat_manager.set_current_project)
@@ -211,14 +220,18 @@ class MainWindow(QWidget):
         cm.project_inventory_updated.connect(lp.handle_project_inventory_update)
         cm.current_project_changed.connect(ctm.ensure_tab_active_and_loaded)
         cm.token_usage_updated.connect(self._handle_token_usage_update)
+        cm.code_generation_process_started.connect(self._handle_code_generation_started)
 
         shortcuts = {
-            "Ctrl+N": self._handle_new_session_for_active_tab, "Ctrl+O": self._show_session_manager,
+            # --- CORRECTED SHORTCUT for Ctrl+N ---
+            "Ctrl+N": self.chat_manager.start_new_chat,
+            # --- END CORRECTION ---
+            "Ctrl+O": self._show_session_manager,
             "Ctrl+S": self._trigger_save_session, "Ctrl+Shift+S": self._trigger_save_as_session,
             "Ctrl+U": self._trigger_file_upload, "Ctrl+Shift+U": self._trigger_dir_upload,
             "Ctrl+G": self._trigger_global_upload_menu, "Ctrl+P": self._show_personality_editor,
             "Ctrl+B": self._show_code_viewer, "Ctrl+R": self._show_rag_viewer,
-            "Ctrl+L": self._show_llm_terminal_window,  # <-- ADD SHORTCUT FOR LLM TERMINAL
+            "Ctrl+L": self._show_llm_terminal_window_slot,
             "Ctrl+W": self._close_current_tab_action
         }
         for seq, func in shortcuts.items(): QShortcut(QKeySequence(seq), self).activated.connect(func)
@@ -254,18 +267,14 @@ class MainWindow(QWidget):
         if not (self.chat_tab_manager and active_project_id): return
         target_tab = self.chat_tab_manager.get_chat_tab_instance(active_project_id)
         if not target_tab:
-            # This can happen if the active project is GLOBAL_COLLECTION_ID and no project tab is open.
-            # In this case, messages for global (like RAG summaries) might not have a tab.
             if active_project_id == constants.GLOBAL_COLLECTION_ID:
                 logger.info(
                     f"New message for Global Context (ID: {message.id}), but no specific project tab is active. Message might not be displayed in a tab.")
-                # Decide if/how to display global messages if no project tab is visible.
-                # For now, if it's a system/error message, maybe just log or status update.
                 if message.role in [SYSTEM_ROLE, ERROR_ROLE] and not (
                         message.metadata and message.metadata.get("is_internal") is False):
                     self.update_status(f"Global Context Update: {message.text[:80]}...",
                                        "#61afef" if message.role == SYSTEM_ROLE else "#e06c75", True, 4000)
-                return  # Don't proceed to add to a non-existent tab
+                return
             else:
                 logger.error(f"No tab instance for active project '{active_project_id}' when handling new message.")
                 return
@@ -403,7 +412,7 @@ class MainWindow(QWidget):
 
         if active_project_id == constants.GLOBAL_COLLECTION_ID:
             logger.debug(f"Stream finished for Global Context. Not finalizing main chat UI as no tab.")
-            self._update_rag_button_state()  # Still update RAG button
+            self._update_rag_button_state()
             return
 
         if not (self.chat_tab_manager and active_project_id): return
@@ -414,7 +423,7 @@ class MainWindow(QWidget):
                 try:
                     display_area.finalize_stream_in_model()
                 except Exception as e:
-                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'")
+                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'");
                     self.update_status(
                         f"Error finalizing stream display: {e}", "#e06c75", True, 5000)
             else:
@@ -491,7 +500,7 @@ class MainWindow(QWidget):
             code_viewer = self.dialog_service.show_code_viewer(ensure_creation=True)
             if code_viewer: code_viewer.update_or_add_file(filename, content)
         except Exception as e:
-            logger.exception(f"Error handling code file update for {filename}: {e}")
+            logger.exception(f"Error handling code file update for {filename}: {e}");
             self.update_status(
                 f"Error showing code update: {e}", "#e06c75", True, 5000)
 
@@ -529,8 +538,9 @@ class MainWindow(QWidget):
         self._update_rag_button_state()
         if self.left_panel: self.left_panel.handle_active_project_ui_update(active_project_id)
 
-    def _handle_new_session_for_active_tab(self):
-        self.chat_manager.start_new_chat()
+    # --- Slot for new session from LeftPanel, now directly connects to ChatManager.start_new_chat ---
+    # def _handle_new_session_for_active_tab(self):
+    #     self.chat_manager.start_new_chat()
 
     def _close_current_tab_action(self):
         if self.main_tab_widget and self.chat_tab_manager and self.main_tab_widget.count() > 0:
@@ -540,7 +550,7 @@ class MainWindow(QWidget):
 
     def update_window_title(self):
         try:
-            base_title = constants.APP_NAME
+            base_title = constants.APP_NAME;
             details = []
             active_chat_backend_id = self.chat_manager.get_current_active_chat_backend_id()
             model_name = self.chat_manager.get_model_for_backend(active_chat_backend_id)
@@ -567,7 +577,7 @@ class MainWindow(QWidget):
                 details.append("RAG")
             self.setWindowTitle(base_title + (f" - [{' | '.join(details)}]" if details else ""))
         except Exception:
-            logger.exception("Error updating window title:")
+            logger.exception("Error updating window title:");
             self.setWindowTitle(constants.APP_NAME)
 
     def _scan_message_for_code_blocks(self, message: ChatMessage):
@@ -602,7 +612,7 @@ class MainWindow(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape and self.chat_manager and self.chat_manager.is_overall_busy():
-            self.chat_manager._cancel_active_tasks()
+            self.chat_manager._cancel_active_tasks()  # type: ignore
             self.update_status("Attempting cancel...", "#e5c07b", True, 2000)
             event.accept()
         else:
@@ -733,16 +743,31 @@ class MainWindow(QWidget):
                 history = self.chat_manager.get_project_history(active_pid)
                 self._rescan_history_for_code_blocks(history)
 
-    # --- NEW SLOT for LLM Terminal ---
     @pyqtSlot()
-    def _show_llm_terminal_window(self):
-        logger.debug("MainWindow: _show_llm_terminal_window called.")
+    def _show_llm_terminal_window_slot(self):
+        logger.debug("MainWindow: _show_llm_terminal_window_slot called by button/shortcut.")
         if self.dialog_service:
-            self.dialog_service.show_llm_terminal_window(ensure_creation=True)
+            terminal_window = self.dialog_service.show_llm_terminal_window(ensure_creation=True)
+            if terminal_window and self._llm_comm_logger_instance:
+                if not hasattr(terminal_window,
+                               '_is_logger_connected') or not terminal_window._is_logger_connected:  # type: ignore
+                    try:
+                        self._llm_comm_logger_instance.new_terminal_log_entry.connect(terminal_window.add_log_entry)
+                        terminal_window._is_logger_connected = True  # type: ignore
+                        logger.info("MainWindow: Connected LlmTerminalWindow to LlmCommunicationLogger.")
+                    except Exception as e:
+                        logger.error(f"MainWindow: Failed to connect LlmTerminalWindow to logger: {e}")
+                else:
+                    logger.debug("MainWindow: LlmTerminalWindow already connected to logger.")
+            elif not self._llm_comm_logger_instance:
+                logger.error("MainWindow: LlmCommunicationLogger instance not available for terminal connection.")
         else:
             logger.error("MainWindow: DialogService not available to show LLM terminal.")
 
-    # --- END NEW SLOT ---
+    @pyqtSlot()
+    def _handle_code_generation_started(self):
+        logger.info("MainWindow: Code generation process started, ensuring LLM Terminal is visible.")
+        self._show_llm_terminal_window_slot()
 
     def _show_rag_viewer(self):
         if self.dialog_service and self.chat_manager and self.chat_manager.is_rag_available():
@@ -751,7 +776,7 @@ class MainWindow(QWidget):
                 try:
                     rag_viewer_instance.focusRequested.disconnect(self.chat_manager.set_chat_focus)
                 except TypeError:
-                    pass  # Was not connected
+                    pass
                 rag_viewer_instance.focusRequested.connect(self.chat_manager.set_chat_focus)
         elif self.chat_manager and not self.chat_manager.is_rag_available():
             QMessageBox.information(self, "RAG Not Ready",

@@ -4,7 +4,7 @@
 # NEW - Added find_message_row_by_id method.
 
 import logging
-from typing import List, Optional, Any, Union
+from typing import List, Optional, Any
 
 from PyQt6.QtCore import QAbstractListModel, QModelIndex, Qt, QObject
 
@@ -12,22 +12,31 @@ from PyQt6.QtCore import QAbstractListModel, QModelIndex, Qt, QObject
 try:
     from core.models import ChatMessage
     from core.message_enums import MessageLoadingState
-except ImportError: # Fallback for different environment setups during development
+except ImportError:  # Fallback for different environment setups during development
     try:
-        from ..core.models import ChatMessage # type: ignore
-        from ..core.message_enums import MessageLoadingState # type: ignore
+        from ..core.models import ChatMessage  # type: ignore
+        from ..core.message_enums import MessageLoadingState  # type: ignore
     except ImportError as e:
         logging.critical(f"ChatListModel: Failed to import core.models or core.message_enums: {e}")
+
+
         # Define dummy classes if import fails, so the rest of the app can try to load
-        class ChatMessage: pass # type: ignore
+        class ChatMessage:
+            pass  # type: ignore
+
+
         from enum import Enum, auto
-        class MessageLoadingState(Enum): IDLE = auto(); LOADING = auto(); COMPLETED = auto(); ERROR = auto() # type: ignore
+
+
+        class MessageLoadingState(Enum):
+            IDLE = auto(); LOADING = auto(); COMPLETED = auto(); ERROR = auto()  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 # Define custom roles
 ChatMessageRole = Qt.ItemDataRole.UserRole + 1
-LoadingStatusRole = Qt.ItemDataRole.UserRole + 2 # New role for loading indicator state
+LoadingStatusRole = Qt.ItemDataRole.UserRole + 2  # New role for loading indicator state
+
 
 class ChatListModel(QAbstractListModel):
     """
@@ -54,11 +63,11 @@ class ChatListModel(QAbstractListModel):
         message = self._messages[index.row()]
 
         if role == ChatMessageRole:
-            return message # Return the full ChatMessage object
+            return message  # Return the full ChatMessage object
         elif role == Qt.ItemDataRole.DisplayRole:
             # Basic display text, delegate handles rich rendering
             return f"[{message.role}] {message.text[:50]}..."
-        elif role == LoadingStatusRole: # Handle the new role
+        elif role == LoadingStatusRole:  # Handle the new role
             return message.loading_state
 
         return None
@@ -71,7 +80,8 @@ class ChatListModel(QAbstractListModel):
             logger.error(f"Attempted to add invalid type to ChatListModel: {type(message)}")
             return
 
-        logger.debug(f"Model: Adding message (Role: {message.role}, ID: {message.id}, LoadingState: {message.loading_state.name if hasattr(message, 'loading_state') else 'N/A'})")
+        logger.debug(
+            f"Model: Adding message (Role: {message.role}, ID: {message.id}, LoadingState: {message.loading_state.name if hasattr(message, 'loading_state') else 'N/A'})")
         row_to_insert = len(self._messages)
         self.beginInsertRows(QModelIndex(), row_to_insert, row_to_insert)
         self._messages.append(message)
@@ -109,7 +119,6 @@ class ChatListModel(QAbstractListModel):
         last_model_idx = self.index(len(self._messages) - 1, 0)
         self.dataChanged.emit(last_model_idx, last_model_idx, [ChatMessageRole])
 
-
     def finalizeLastMessage(self):
         """
         Marks the last message as no longer streaming internally.
@@ -119,11 +128,12 @@ class ChatListModel(QAbstractListModel):
             return
 
         last_message = self._messages[-1]
-        logger.debug(f"Model: Finalizing streaming for last message (ID: {last_message.id}, Role: {last_message.role}).")
+        logger.debug(
+            f"Model: Finalizing streaming for last message (ID: {last_message.id}, Role: {last_message.role}).")
 
         if last_message.metadata and last_message.metadata.get("is_streaming"):
             last_message.metadata["is_streaming"] = False
-            model_index = self.index(len(self._messages) -1, 0)
+            model_index = self.index(len(self._messages) - 1, 0)
             self.dataChanged.emit(model_index, model_index, [ChatMessageRole])
         else:
             logger.debug("Model: Finalize called but last message wasn't marked as streaming.")
@@ -146,8 +156,8 @@ class ChatListModel(QAbstractListModel):
         existing_loading_state = self._messages[index].loading_state
         self._messages[index] = message
         if self._messages[index].loading_state == MessageLoadingState.IDLE and \
-           existing_loading_state != MessageLoadingState.IDLE and \
-           message.role == "model": # If AI model and new state is IDLE, preserve existing
+                existing_loading_state != MessageLoadingState.IDLE and \
+                message.role == "model":  # If AI model and new state is IDLE, preserve existing
             self._messages[index].loading_state = existing_loading_state
 
         model_idx = self.index(index, 0)
@@ -166,7 +176,8 @@ class ChatListModel(QAbstractListModel):
             message = self._messages[row]
             if hasattr(message, 'id') and message.id == message_id:
                 if hasattr(message, 'loading_state') and message.loading_state != new_state:
-                    logger.info(f"Model: Updating loading state for message ID '{message_id}' from {message.loading_state.name} to {new_state.name}.")
+                    logger.info(
+                        f"Model: Updating loading state for message ID '{message_id}' from {message.loading_state.name} to {new_state.name}.")
                     message.loading_state = new_state
                     model_index = self.index(row, 0)
                     self.dataChanged.emit(model_index, model_index, [LoadingStatusRole])
@@ -174,14 +185,14 @@ class ChatListModel(QAbstractListModel):
                 elif not hasattr(message, 'loading_state'):
                     logger.warning(f"Message ID '{message_id}' found, but it lacks 'loading_state' attribute.")
                     # Initialize it if missing, especially for AI messages
-                    if message.role == "model": # MODEL_ROLE constant might not be imported here
+                    if message.role == "model":  # MODEL_ROLE constant might not be imported here
                         logger.info(f"Initializing loading_state for message ID '{message_id}' to {new_state.name}.")
                         message.loading_state = new_state
                         model_index = self.index(row, 0)
                         self.dataChanged.emit(model_index, model_index, [LoadingStatusRole])
                         return True
                     return False
-                return True # State is already the same, no change needed
+                return True  # State is already the same, no change needed
         logger.warning(f"Model: Could not find message with ID '{message_id}' to update loading state.")
         return False
 
@@ -195,13 +206,14 @@ class ChatListModel(QAbstractListModel):
             if hasattr(msg, 'id') and msg.id == message_id:
                 return row
         return None
+
     # --- END NEW METHOD ---
 
     def loadHistory(self, history: List[ChatMessage]):
         """Replaces the entire model content with a new history list."""
         logger.info(f"Model: loadHistory called (Incoming Count: {len(history)})")
         self.beginResetModel()
-        self._messages = list(history) # Replace internal list
+        self._messages = list(history)  # Replace internal list
         self.endResetModel()
         logger.info(f"Model: Model reset complete (Internal Count: {len(self._messages)})")
 

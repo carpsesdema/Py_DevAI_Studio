@@ -2,9 +2,9 @@
 import logging
 from typing import Optional
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout
-from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont, QCloseEvent, QFontDatabase
+from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtGui import QCloseEvent, QFontDatabase
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit
 
 # Assuming constants.py is accessible
 try:
@@ -14,9 +14,12 @@ except ImportError:
     class constants:
         CHAT_FONT_FAMILY = "Arial"
         CHAT_FONT_SIZE = 10
+
+
     logging.warning("LlmTerminalWindow: Could not import constants, using fallback.")
 
 logger = logging.getLogger(__name__)
+
 
 class LlmTerminalWindow(QWidget):
     """
@@ -31,13 +34,14 @@ class LlmTerminalWindow(QWidget):
         # self.setModal(False) # QWidget is non-modal by default when shown
 
         self._log_text_edit: Optional[QTextEdit] = None
+        self._is_logger_connected: bool = False  # Flag to prevent multiple connections
         self._init_ui()
         logger.info("LlmTerminalWindow initialized.")
 
     def _init_ui(self):
         """Initialize the widgets for the dialog."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(5, 5, 5, 5) # Small margins
+        main_layout.setContentsMargins(5, 5, 5, 5)  # Small margins
         main_layout.setSpacing(5)
 
         # Log Display Area
@@ -45,14 +49,10 @@ class LlmTerminalWindow(QWidget):
         self._log_text_edit.setObjectName("LlmLogTextEdit")
         self._log_text_edit.setReadOnly(True)
 
-        # Set a monospace font, dark theme friendly
-        # Using QFontDatabase.systemFont for better cross-platform compatibility
-        # than hardcoding a specific font name that might not exist.
         log_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        log_font.setPointSize(constants.CHAT_FONT_SIZE -1) # Slightly smaller than main chat
+        log_font.setPointSize(constants.CHAT_FONT_SIZE - 1)
         self._log_text_edit.setFont(log_font)
 
-        # Basic dark theme styling (can be enhanced with QSS later)
         self._log_text_edit.setStyleSheet("""
             QTextEdit#LlmLogTextEdit {
                 background-color: #21252B; /* Dark background */
@@ -62,15 +62,7 @@ class LlmTerminalWindow(QWidget):
                 padding: 5px;
             }
         """)
-        main_layout.addWidget(self._log_text_edit, 1) # Text edit takes most space
-
-        # Optional: Add a clear button if desired
-        # clear_button = QPushButton("Clear Log")
-        # clear_button.clicked.connect(self.clear_log)
-        # button_layout = QHBoxLayout()
-        # button_layout.addStretch()
-        # button_layout.addWidget(clear_button)
-        # main_layout.addLayout(button_layout)
+        main_layout.addWidget(self._log_text_edit, 1)
 
         self.setLayout(main_layout)
 
@@ -78,10 +70,7 @@ class LlmTerminalWindow(QWidget):
     def add_log_entry(self, text: str):
         """Appends a new log entry to the text edit and scrolls to the bottom."""
         if self._log_text_edit:
-            self._log_text_edit.append(text) # append() also handles scrolling
-            # self._log_text_edit.verticalScrollBar().setValue(
-            #     self._log_text_edit.verticalScrollBar().maximum()
-            # )
+            self._log_text_edit.append(text)
         else:
             logger.warning("LlmTerminalWindow: _log_text_edit is None, cannot add log entry.")
 
@@ -98,7 +87,7 @@ class LlmTerminalWindow(QWidget):
         """Override close event to hide the window instead of destroying it."""
         logger.debug("LlmTerminalWindow closeEvent: Hiding window.")
         self.hide()
-        event.ignore() # Prevent the window from being destroyed
+        event.ignore()
 
 
 if __name__ == '__main__':
@@ -110,7 +99,6 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
 
-    # Create a dummy parent window to show the terminal
     main_dummy_window = QWidget()
     main_dummy_window.setWindowTitle("Main App (Dummy)")
     main_dummy_window.setGeometry(100, 100, 300, 100)
@@ -119,18 +107,17 @@ if __name__ == '__main__':
     dummy_layout.addWidget(btn_show_terminal)
     main_dummy_window.show()
 
-    # Create and manage the terminal window
     llm_terminal_instance = LlmTerminalWindow()
+
 
     def show_terminal():
         llm_terminal_instance.show()
         llm_terminal_instance.activateWindow()
         llm_terminal_instance.raise_()
-        # Test adding logs
         llm_terminal_instance.add_log_entry("Test Log Entry 1: Hello from the terminal!")
         llm_terminal_instance.add_log_entry("[System]: This is a system message.")
         for i in range(5):
-            llm_terminal_instance.add_log_entry(f"Scroll test line {i+1}")
+            llm_terminal_instance.add_log_entry(f"Scroll test line {i + 1}")
 
 
     btn_show_terminal.clicked.connect(show_terminal)

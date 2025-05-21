@@ -1,12 +1,12 @@
 # SynChat/backend/gemini_adapter.py
-import logging
 import asyncio
+import logging
 import os
 from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple  # Added Tuple
 
+from core.models import ChatMessage, MODEL_ROLE, USER_ROLE
 # Import interface and model
 from .interface import BackendInterface
-from core.models import ChatMessage, MODEL_ROLE, USER_ROLE
 
 # Attempt import for type hinting and error checking
 try:
@@ -136,7 +136,7 @@ class GeminiAdapter(BackendInterface):
 
     # --- MODIFIED get_response_stream to accept options (for temperature) ---
     async def get_response_stream(self, history: List[ChatMessage], options: Optional[Dict[str, Any]] = None) -> \
-    AsyncGenerator[str, None]:
+            AsyncGenerator[str, None]:
         logger.info(f"GeminiAdapter: Generating stream. History items: {len(history)}, Options: {options}")
         self._last_error = None
         self._last_prompt_tokens = None  # Reset before new request

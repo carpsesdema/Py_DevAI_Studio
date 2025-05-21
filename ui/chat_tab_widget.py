@@ -2,8 +2,8 @@
 import logging
 from typing import Optional
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtWidgets import QWidget, QVBoxLayout
 
 # Assuming ChatDisplayArea and ChatInputBar are in the same 'ui' directory
 try:
@@ -17,14 +17,16 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
+
 class ChatTabWidget(QWidget):
     """
     A QWidget that serves as the content for each tab in the main chat interface.
     It contains a ChatDisplayArea for showing messages and a ChatInputBar for user input.
     """
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setObjectName("ChatTabContentWidget") # For styling if needed
+        self.setObjectName("ChatTabContentWidget")  # For styling if needed
 
         self.chat_display_area: ChatDisplayArea = ChatDisplayArea(self)
         self.chat_input_bar: ChatInputBar = ChatInputBar(self)
@@ -35,10 +37,10 @@ class ChatTabWidget(QWidget):
     def _init_layout(self):
         """Sets up the layout for the chat display and input bar."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0) # No margins within the tab content
-        layout.setSpacing(0) # No spacing between display and input bar
+        layout.setContentsMargins(0, 0, 0, 0)  # No margins within the tab content
+        layout.setSpacing(0)  # No spacing between display and input bar
 
-        layout.addWidget(self.chat_display_area, 1) # Display area takes available stretch
+        layout.addWidget(self.chat_display_area, 1)  # Display area takes available stretch
         layout.addWidget(self.chat_input_bar)
 
         self.setLayout(layout)

@@ -3,30 +3,32 @@
 
 import logging
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
+from PyQt6.QtCore import pyqtSignal, QSize, pyqtSlot
+from PyQt6.QtGui import QFont, QIcon  # Added QIcon
 # --- PyQt6 Imports ---
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QSizePolicy, QFileDialog,
-    QStyle, QLabel
+    QLabel
 )
-from PyQt6.QtGui import QFont, QIcon # Added QIcon
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, pyqtSlot
 
 # --- Local Imports ---
 from utils import constants
-from .multiline_input_widget import MultilineInputWidget
 from .loading_indicator import LoadingIndicator
+from .multiline_input_widget import MultilineInputWidget
+
 try:
     from services.image_handler_service import ImageHandlerService
+
     IMAGE_SERVICE_AVAILABLE = True
 except ImportError:
     ImageHandlerService = None
     IMAGE_SERVICE_AVAILABLE = False
     logging.warning("ChatInputBar: ImageHandlerService not found. Image attachment disabled.")
 
-
 logger = logging.getLogger(__name__)
+
 
 class ChatInputBar(QWidget):
     """
@@ -70,7 +72,7 @@ class ChatInputBar(QWidget):
         self._attach_button.setToolTip("Attach Image(s)")
 
         # --- Load Custom Icon ---
-        custom_icon_path = os.path.join(constants.ASSETS_PATH, "attach_icon.svg") # Assumes your icon is named this
+        custom_icon_path = os.path.join(constants.ASSETS_PATH, "attach_icon.svg")  # Assumes your icon is named this
         if os.path.exists(custom_icon_path):
             custom_icon = QIcon(custom_icon_path)
             if not custom_icon.isNull():
@@ -78,21 +80,21 @@ class ChatInputBar(QWidget):
                 logger.info(f"Loaded custom attach icon from: {custom_icon_path}")
             else:
                 logger.warning(f"Custom attach icon loaded but is null: {custom_icon_path}")
-                self._attach_button.setText("+") # Fallback text
+                self._attach_button.setText("+")  # Fallback text
         else:
             logger.warning(f"Custom attach icon not found: {custom_icon_path}. Using fallback text.")
-            self._attach_button.setText("+") # Fallback text
+            self._attach_button.setText("+")  # Fallback text
         # --- End Custom Icon Loading ---
 
         self._attach_button.setFixedSize(self.ATTACH_BUTTON_SIZE)
-        self._attach_button.setIconSize(self.ATTACH_BUTTON_SIZE - QSize(8, 8)) # Make icon slightly smaller than button
+        self._attach_button.setIconSize(self.ATTACH_BUTTON_SIZE - QSize(8, 8))  # Make icon slightly smaller than button
         self._attach_button.setEnabled(IMAGE_SERVICE_AVAILABLE)
         main_layout.addWidget(self._attach_button)
         # ------------------------
 
         # Multiline Input
         self._multiline_input = MultilineInputWidget(self)
-        main_layout.addWidget(self._multiline_input, 1) # Input widget stretches
+        main_layout.addWidget(self._multiline_input, 1)  # Input widget stretches
 
         # Loading Indicator
         self._loading_indicator = LoadingIndicator(self)
@@ -151,7 +153,7 @@ class ChatInputBar(QWidget):
             if self._attached_image_paths:
                 filenames = [os.path.basename(p) for p in self._attached_image_paths]
                 tooltip_text = f"Attached ({len(filenames)}):\n- " + "\n- ".join(filenames)
-                if len(tooltip_text) > 500: tooltip_text = tooltip_text[:497]+"..."
+                if len(tooltip_text) > 500: tooltip_text = tooltip_text[:497] + "..."
                 self._attach_button.setToolTip(tooltip_text)
             else:
                 self._attach_button.setToolTip("Attach Image(s)")
@@ -191,9 +193,10 @@ class ChatInputBar(QWidget):
             logger.info(f"Successfully processed {processed_count} images.")
 
         elif self._attached_image_paths and not self._image_service:
-             logger.error("Cannot send attached images: Image service is not available.")
+            logger.error("Cannot send attached images: Image service is not available.")
 
-        logger.debug(f"ChatInputBar emitting sendMessageRequested (Text: {bool(text_to_send)}, Images: {len(image_data_list)})")
+        logger.debug(
+            f"ChatInputBar emitting sendMessageRequested (Text: {bool(text_to_send)}, Images: {len(image_data_list)})")
         self.sendMessageRequested.emit(text_to_send, image_data_list)
         self.clear_text()
 
@@ -202,7 +205,7 @@ class ChatInputBar(QWidget):
         """Handles busy state for enabling/disabling input/button AND indicator."""
         logger.debug(f"ChatInputBar handling busy state: {is_busy}")
         if self._is_busy == is_busy:
-             return
+            return
         self._is_busy = is_busy
         effective_enabled = self._is_enabled and not self._is_busy
 
@@ -215,17 +218,19 @@ class ChatInputBar(QWidget):
 
         if self._loading_indicator:
             self._loading_indicator.setVisible(is_busy)
-            if is_busy: self._loading_indicator.start()
-            else: self._loading_indicator.stop()
+            if is_busy:
+                self._loading_indicator.start()
+            else:
+                self._loading_indicator.stop()
 
     @pyqtSlot()
     def _update_button_state(self):
         """Update send button based on text, attachments, and busy state."""
         if self._send_button:
-             has_text = bool(self.get_text())
-             has_attachments = bool(self._attached_image_paths)
-             can_send = self._is_enabled and not self._is_busy and (has_text or has_attachments)
-             self._send_button.setEnabled(can_send)
+            has_text = bool(self.get_text())
+            has_attachments = bool(self._attached_image_paths)
+            can_send = self._is_enabled and not self._is_busy and (has_text or has_attachments)
+            self._send_button.setEnabled(can_send)
 
     # --- Public Methods ---
     def get_text(self) -> str:

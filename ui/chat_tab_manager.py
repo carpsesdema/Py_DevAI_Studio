@@ -2,13 +2,13 @@
 import logging
 from typing import Optional, Dict, List, Any
 
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QTabWidget, QWidget
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
 
 try:
     from .chat_tab_widget import ChatTabWidget
     from core.chat_manager import ChatManager
-    from core.models import ChatMessage # Keep for type hinting if ChatTabWidget exposes it
+    from core.models import ChatMessage  # Keep for type hinting if ChatTabWidget exposes it
     from utils import constants
 except ImportError as e:
     logging.critical(f"ChatTabManager: Failed to import critical components: {e}")
@@ -25,7 +25,7 @@ except ImportError as e:
         "get_current_project_id": lambda: None,
         "set_current_project": lambda x: None,
         "get_project_history": lambda x: [],
-        "process_user_message": lambda x, y: None, # type: ignore
+        "process_user_message": lambda x, y: None,  # type: ignore
         "get_project_context_manager": lambda: type("DummyPCM", (object,),
                                                     {"get_project_name": lambda x: "DummyProject"})()
     })
@@ -123,23 +123,23 @@ class ChatTabManager(QObject):
             chat_tab_instance_to_close.deleteLater()
 
         if self.tab_widget.count() == 0:
-            logger.info("All closable tabs closed. ChatManager will default to Global Context for RAG if no project is selected.")
+            logger.info(
+                "All closable tabs closed. ChatManager will default to Global Context for RAG if no project is selected.")
             # MainWindow should ensure a sensible state, perhaps selecting Global in LeftPanel
             # or prompting for new project if no project context makes sense.
             # We emit the active project changed with Global to reflect this state if ChatManager defaults.
             if self.chat_manager.get_current_project_id() != constants.GLOBAL_COLLECTION_ID:
-                 if self.chat_manager.get_project_context_manager().get_all_projects_info(): # Only if there are projects
-                     # Try to select the first available project if one exists
-                     all_pids = list(self.chat_manager.get_project_context_manager().get_all_projects_info().keys())
-                     first_non_global = next((pid for pid in all_pids if pid != constants.GLOBAL_COLLECTION_ID), None)
-                     if first_non_global:
-                         self.chat_manager.set_current_project(first_non_global)
-                         return # set_current_project will trigger ensure_tab_active_and_loaded
+                if self.chat_manager.get_project_context_manager().get_all_projects_info():  # Only if there are projects
+                    # Try to select the first available project if one exists
+                    all_pids = list(self.chat_manager.get_project_context_manager().get_all_projects_info().keys())
+                    first_non_global = next((pid for pid in all_pids if pid != constants.GLOBAL_COLLECTION_ID), None)
+                    if first_non_global:
+                        self.chat_manager.set_current_project(first_non_global)
+                        return  # set_current_project will trigger ensure_tab_active_and_loaded
 
             # If no other project to switch to, ensure global context is signalled as active
             # This will NOT create a tab, but will update UI elements like window title.
             self.active_project_context_changed.emit(constants.GLOBAL_COLLECTION_ID)
-
 
     def _get_project_id_for_tab_instance(self, tab_instance: Optional[QWidget]) -> Optional[str]:
         if not isinstance(tab_instance, ChatTabWidget):
@@ -158,13 +158,15 @@ class ChatTabManager(QObject):
 
         # --- MODIFICATION START: Do not create a visible tab for Global Context ---
         if project_id == constants.GLOBAL_COLLECTION_ID:
-            logger.info(f"ChatTabManager: Global Context ('{project_id}') selected. No dedicated tab will be shown. RAG context is active.")
+            logger.info(
+                f"ChatTabManager: Global Context ('{project_id}') selected. No dedicated tab will be shown. RAG context is active.")
             self.active_project_context_changed.emit(project_id)
             # If no other tabs are open, user must select/create a project via LeftPanel for chat.
             # The UI should reflect that Global is active for RAG, but chat happens in a project tab.
             if self.tab_widget.count() == 0:
-                logger.info("ChatTabManager: Global context is active, and no project tabs are open. User should select/create a project for chat.")
-            return # Exit before creating/activating a tab for Global Context
+                logger.info(
+                    "ChatTabManager: Global context is active, and no project tabs are open. User should select/create a project for chat.")
+            return  # Exit before creating/activating a tab for Global Context
         # --- MODIFICATION END ---
 
         project_name: Optional[str] = None
@@ -174,13 +176,15 @@ class ChatTabManager(QObject):
 
         if not project_name:
             project_name = project_id
-            logger.warning(f"ChatTabManager: Project name for ID '{project_id}' not found in PCM. Using ID as name for tab.")
+            logger.warning(
+                f"ChatTabManager: Project name for ID '{project_id}' not found in PCM. Using ID as name for tab.")
 
         effective_project_name = project_name
         chat_tab_instance = self._project_id_to_chat_tab_instance.get(project_id)
 
         if not chat_tab_instance:
-            logger.debug(f"No existing tab for project '{project_id}'. Creating new one named '{effective_project_name}'.")
+            logger.debug(
+                f"No existing tab for project '{project_id}'. Creating new one named '{effective_project_name}'.")
             chat_tab_instance = ChatTabWidget(self.tab_widget)
             input_bar = chat_tab_instance.get_chat_input_bar()
             if input_bar and hasattr(input_bar, 'sendMessageRequested'):
@@ -258,7 +262,7 @@ class ChatTabManager(QObject):
 
             for i in range(self.tab_widget.count()):
                 if self.tab_widget.widget(i) == instance:
-                    effective_name = new_name # Global context display name handled by not creating a tab
+                    effective_name = new_name  # Global context display name handled by not creating a tab
                     self.tab_widget.setTabText(i, effective_name)
                     self.tab_widget.setTabToolTip(i, f"Chat for: {effective_name} (ID: {project_id})")
                     logger.info(f"Updated tab name for project '{project_id}' to '{effective_name}'.")

@@ -1,14 +1,15 @@
 # Syn_LLM/services/image_handler_service.py
 # NEW FILE - Handles image loading, validation, and encoding
 
-import os
 import base64
 import io
 import logging
+import os
 from typing import Optional, Tuple
 
 try:
     from PIL import Image, ExifTags
+
     PILLOW_AVAILABLE = True
 except ImportError:
     Image = None
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Default limits (can be moved to constants)
 DEFAULT_MAX_IMAGE_SIZE_MB = 15
-DEFAULT_MAX_DIMENSION = 2048 # Max width or height
+DEFAULT_MAX_DIMENSION = 2048  # Max width or height
 
 # Mapping from PIL format to common MIME types
 MIME_TYPE_MAP = {
@@ -30,6 +31,7 @@ MIME_TYPE_MAP = {
     "WEBP": "image/webp",
     "BMP": "image/bmp",
 }
+
 
 class ImageHandlerService:
     """Provides methods for handling image files for LLM input."""
@@ -62,8 +64,9 @@ class ImageHandlerService:
             # 1. Validate file size before loading fully
             file_size = os.path.getsize(file_path)
             if file_size > self.max_size_bytes:
-                logger.warning(f"Image skipped: '{os.path.basename(file_path)}' exceeds max size ({file_size / (1024*1024):.1f}MB > {self.max_size_bytes / (1024*1024):.1f}MB)")
-                return None # Indicate failure due to size
+                logger.warning(
+                    f"Image skipped: '{os.path.basename(file_path)}' exceeds max size ({file_size / (1024 * 1024):.1f}MB > {self.max_size_bytes / (1024 * 1024):.1f}MB)")
+                return None  # Indicate failure due to size
 
             # 2. Load Image using Pillow
             img = Image.open(file_path)
@@ -75,14 +78,17 @@ class ImageHandlerService:
                         break
                 exif = dict(img.getexif().items())
 
-                if exif.get(orientation) == 3: img = img.rotate(180, expand=True)
-                elif exif.get(orientation) == 6: img = img.rotate(270, expand=True)
-                elif exif.get(orientation) == 8: img = img.rotate(90, expand=True)
+                if exif.get(orientation) == 3:
+                    img = img.rotate(180, expand=True)
+                elif exif.get(orientation) == 6:
+                    img = img.rotate(270, expand=True)
+                elif exif.get(orientation) == 8:
+                    img = img.rotate(90, expand=True)
                 logger.debug(f"Applied EXIF orientation {exif.get(orientation)} to image.")
             except (AttributeError, KeyError, IndexError, Exception) as e_exif:
                 # cases: image don't have getexif method, don't have exif data or orientation tag
                 logger.debug(f"Could not get/apply EXIF orientation for {os.path.basename(file_path)}: {e_exif}")
-                pass # Ignore errors if EXIF data is missing/corrupt
+                pass  # Ignore errors if EXIF data is missing/corrupt
 
             # 4. Convert to RGB if it has transparency (needed for JPEG saving)
             original_format = img.format
@@ -103,14 +109,15 @@ class ImageHandlerService:
             base64_string = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
             # 7. Determine MIME type
-            mime_type = MIME_TYPE_MAP.get(save_format, "image/jpeg") # Default to jpeg
+            mime_type = MIME_TYPE_MAP.get(save_format, "image/jpeg")  # Default to jpeg
 
-            logger.info(f"Successfully processed image '{os.path.basename(file_path)}' (Format: {save_format}, Size: {len(base64_string)} chars)")
+            logger.info(
+                f"Successfully processed image '{os.path.basename(file_path)}' (Format: {save_format}, Size: {len(base64_string)} chars)")
             return base64_string, mime_type
 
         except Exception as e:
             logger.exception(f"Error processing image file '{file_path}': {e}")
             return None
         finally:
-             if 'img' in locals() and hasattr(img, 'close'):
-                  img.close()
+            if 'img' in locals() and hasattr(img, 'close'):
+                img.close()
