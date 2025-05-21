@@ -1,4 +1,3 @@
-# ui/dialog_service.py
 import logging
 import os
 import datetime  # Ensure datetime is imported
@@ -14,12 +13,14 @@ try:
     from .dialogs.personality_dialog import EditPersonalityDialog
     from .dialogs.session_manager_dialog import SessionManagerDialog
     from .dialogs.rag_viewer_dialog import RAGViewerDialog
+    from .dialogs.llm_terminal_window import LlmTerminalWindow  # <-- ADD THIS IMPORT
 except ImportError as e:
     logging.critical(f"DialogService: Failed to import custom dialogs: {e}")
     CodeViewerWindow = QDialog
     EditPersonalityDialog = QDialog
     SessionManagerDialog = QDialog
     RAGViewerDialog = QDialog
+    LlmTerminalWindow = QWidget  # Fallback if import fails
 
 # Import ChatManager and other necessary types
 try:
@@ -56,7 +57,8 @@ class DialogService(QObject):
         # Cache dialog instances where appropriate
         self._code_viewer_window: Optional[CodeViewerWindow] = None
         self._session_manager_dialog: Optional[SessionManagerDialog] = None
-        self._rag_viewer_dialog: Optional[RAGViewerDialog] = None  # RAG viewer can be modal, but caching might be ok
+        self._rag_viewer_dialog: Optional[RAGViewerDialog] = None
+        self._llm_terminal_window: Optional[LlmTerminalWindow] = None  # <-- ADD THIS INSTANCE VARIABLE
         logger.info("DialogService initialized.")
 
     def _get_upload_filter(self) -> str:
@@ -152,8 +154,8 @@ class DialogService(QObject):
 
             target_pos = QCursor.pos()
             if hasattr(self.parent_window, 'left_panel') and self.parent_window.left_panel and \
-                    hasattr(self.parent_window.left_panel, 'upload_global_button'):
-                global_upload_button = self.parent_window.left_panel.upload_global_button
+                    hasattr(self.parent_window.left_panel, 'manage_global_knowledge_button'):  # Corrected button name
+                global_upload_button = self.parent_window.left_panel.manage_global_knowledge_button  # Corrected button name
                 if global_upload_button:
                     target_pos = global_upload_button.mapToGlobal(global_upload_button.rect().bottomLeft())
 
@@ -169,14 +171,10 @@ class DialogService(QObject):
     def show_edit_personality(self) -> Optional[str]:
         logger.debug("DialogService: Showing edit personality dialog.")
         try:
-            # --- THIS IS THE FIX ---
-            # Changed from get_current_personality to get_current_chat_personality
             current_prompt = self.chat_manager.get_current_chat_personality()
-            # --- END FIX ---
             dialog = EditPersonalityDialog(current_prompt, self.parent_window)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 return dialog.get_prompt_text()
-            # If cancelled, MainWindow will update status if needed
             return None
         except Exception as e:
             logger.exception("Error showing EditPersonalityDialog:")
@@ -189,7 +187,7 @@ class DialogService(QObject):
             if self._code_viewer_window is None and ensure_creation:
                 self._code_viewer_window = CodeViewerWindow(self.parent_window)
             if self._code_viewer_window:
-                self._code_viewer_window.show()  # show() is non-blocking
+                self._code_viewer_window.show()
                 self._code_viewer_window.activateWindow()
                 self._code_viewer_window.raise_()
             return self._code_viewer_window
@@ -197,6 +195,31 @@ class DialogService(QObject):
             logger.exception("Error showing CodeViewerWindow:")
             QMessageBox.critical(self.parent_window, "Dialog Error", f"Could not open Code Viewer:\n{e}")
             return None
+
+    # --- NEW METHOD for LLM Terminal ---
+    def show_llm_terminal_window(self, ensure_creation: bool = True) -> Optional[LlmTerminalWindow]:
+        logger.debug(f"DialogService: Showing LLM terminal window (ensure_creation={ensure_creation}).")
+        try:
+            if self._llm_terminal_window is None and ensure_creation:
+                # Ensure LlmTerminalWindow is imported correctly
+                if LlmTerminalWindow is QWidget and not hasattr(LlmTerminalWindow, 'add_log_entry'):
+                    logger.error("LlmTerminalWindow was not properly imported. Using fallback QWidget.")
+                    # Optionally, raise an error or handle this case more gracefully
+                    # For now, we'll proceed, but it won't function as intended.
+                self._llm_terminal_window = LlmTerminalWindow(self.parent_window)
+                logger.info("DialogService: Created new LlmTerminalWindow instance.")
+
+            if self._llm_terminal_window:
+                self._llm_terminal_window.show()
+                self._llm_terminal_window.activateWindow()
+                self._llm_terminal_window.raise_()
+            return self._llm_terminal_window
+        except Exception as e:
+            logger.exception("Error showing LlmTerminalWindow:")
+            QMessageBox.critical(self.parent_window, "Dialog Error", f"Could not open LLM Terminal:\n{e}")
+            return None
+
+    # --- END NEW METHOD ---
 
     def show_rag_viewer(self) -> Optional[RAGViewerDialog]:
         logger.debug("DialogService: Showing RAG viewer.")
@@ -210,10 +233,8 @@ class DialogService(QObject):
 
             if self._rag_viewer_dialog is None:  # Create if not cached
                 self._rag_viewer_dialog = RAGViewerDialog(vector_db_service, self.parent_window)
-                # MainWindow will connect the focusRequested signal after getting the instance
-
-            self._rag_viewer_dialog.exec()  # Modal execution
-            return self._rag_viewer_dialog  # Return instance if MainWindow needs to reconnect signals
+            self._rag_viewer_dialog.exec()
+            return self._rag_viewer_dialog
         except Exception as e:
             logger.exception("Error creating or showing RAGViewerDialog:")
             QMessageBox.critical(self.parent_window, "Dialog Error", f"Could not open RAG Viewer:\n{e}")
@@ -229,12 +250,13 @@ class DialogService(QObject):
             )
             if ok and project_name_input and project_name_input.strip():
                 clean_project_name = project_name_input.strip()
-                if clean_project_name.lower() in [constants.GLOBAL_COLLECTION_ID.lower(), "global context", "global"]:
+                if clean_project_name.lower() in [constants.GLOBAL_COLLECTION_ID.lower(), "global context", "global",
+                                                  constants.GLOBAL_CONTEXT_DISPLAY_NAME.lower()]:
                     QMessageBox.warning(self.parent_window, "Invalid Name",
                                         f"'{clean_project_name}' is a reserved name. Please choose another.")
                     return None
                 return clean_project_name
-            elif ok:  # User pressed OK but entered empty name
+            elif ok:
                 QMessageBox.warning(self.parent_window, "Invalid Name", "Project name cannot be empty.")
             return None
         except Exception as e:
@@ -246,7 +268,12 @@ class DialogService(QObject):
         logger.info("DialogService attempting to close non-modal dialogs.")
         if self._code_viewer_window:
             try:
-                self._code_viewer_window.close()  # CodeViewerWindow handles its own hide/ignore logic
+                self._code_viewer_window.close()
             except Exception as e:
                 logger.error(f"Error closing CodeViewerWindow: {e}")
-        # Other dialogs are modal and will be closed by user interaction or their exec() call returning.
+        # --- ADD CLOSING FOR LLM TERMINAL ---
+        if self._llm_terminal_window:
+            try:
+                self._llm_terminal_window.close()  # It will hide itself
+            except Exception as e:
+                logger.error(f"Error closing LlmTerminalWindow: {e}")

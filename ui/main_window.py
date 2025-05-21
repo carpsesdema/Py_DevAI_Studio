@@ -1,3 +1,4 @@
+# ui/main_window.py
 import logging
 import os
 import re
@@ -62,7 +63,7 @@ class MainWindow(QWidget):
             self.dialog_service = DialogService(self, self.chat_manager)
         except Exception as e:
             logger.critical(f"Failed to initialize DialogService: {e}", exc_info=True)
-            QApplication.quit();
+            QApplication.quit()
             return
 
         self._init_ui()
@@ -72,11 +73,11 @@ class MainWindow(QWidget):
                 self.chat_tab_manager = ChatTabManager(self.main_tab_widget, self.chat_manager, self)
             except Exception as e:
                 logger.critical(f"Failed to initialize ChatTabManager: {e}", exc_info=True)
-                QApplication.quit();
+                QApplication.quit()
                 return
         else:
             logger.critical("main_tab_widget is None after _init_ui. Cannot initialize ChatTabManager.")
-            QApplication.quit();
+            QApplication.quit()
             return
 
         self._apply_styles()
@@ -87,7 +88,7 @@ class MainWindow(QWidget):
     def _setup_window(self):
         self.setWindowTitle(constants.APP_NAME)
         try:
-            app_icon_path = os.path.join(constants.ASSETS_PATH, "Synchat.ico")
+            app_icon_path = os.path.join(constants.ASSETS_PATH, "Synchat.ico")  # Make sure Synchat.ico is in assets
             std_fallback_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
             app_icon = QIcon(app_icon_path) if os.path.exists(app_icon_path) else std_fallback_icon
             if not app_icon.isNull():
@@ -175,7 +176,7 @@ class MainWindow(QWidget):
     def _connect_signals(self):
         logger.debug("MainWindow: Connecting signals...")
         if not all([self.chat_manager, self.left_panel, self.dialog_service, self.chat_tab_manager]):
-            logger.critical("Cannot connect signals: Crucial components missing.");
+            logger.critical("Cannot connect signals: Crucial components missing.")
             return
 
         lp = self.left_panel
@@ -186,6 +187,7 @@ class MainWindow(QWidget):
         lp.editPersonalityClicked.connect(self._show_personality_editor)
         lp.viewCodeBlocksClicked.connect(self._show_code_viewer)
         lp.viewRagContentClicked.connect(self._show_rag_viewer)
+        lp.viewLlmTerminalClicked.connect(self._show_llm_terminal_window)  # <-- CONNECT NEW BUTTON
         lp.newProjectClicked.connect(self._handle_new_project_request)
         lp.uploadGlobalClicked.connect(self._trigger_global_upload_menu)
         lp.projectSelected.connect(self.chat_manager.set_current_project)
@@ -216,6 +218,7 @@ class MainWindow(QWidget):
             "Ctrl+U": self._trigger_file_upload, "Ctrl+Shift+U": self._trigger_dir_upload,
             "Ctrl+G": self._trigger_global_upload_menu, "Ctrl+P": self._show_personality_editor,
             "Ctrl+B": self._show_code_viewer, "Ctrl+R": self._show_rag_viewer,
+            "Ctrl+L": self._show_llm_terminal_window,  # <-- ADD SHORTCUT FOR LLM TERMINAL
             "Ctrl+W": self._close_current_tab_action
         }
         for seq, func in shortcuts.items(): QShortcut(QKeySequence(seq), self).activated.connect(func)
@@ -251,8 +254,22 @@ class MainWindow(QWidget):
         if not (self.chat_tab_manager and active_project_id): return
         target_tab = self.chat_tab_manager.get_chat_tab_instance(active_project_id)
         if not target_tab:
-            logger.error(f"No tab instance for active project '{active_project_id}' when handling new message.")
-            return
+            # This can happen if the active project is GLOBAL_COLLECTION_ID and no project tab is open.
+            # In this case, messages for global (like RAG summaries) might not have a tab.
+            if active_project_id == constants.GLOBAL_COLLECTION_ID:
+                logger.info(
+                    f"New message for Global Context (ID: {message.id}), but no specific project tab is active. Message might not be displayed in a tab.")
+                # Decide if/how to display global messages if no project tab is visible.
+                # For now, if it's a system/error message, maybe just log or status update.
+                if message.role in [SYSTEM_ROLE, ERROR_ROLE] and not (
+                        message.metadata and message.metadata.get("is_internal") is False):
+                    self.update_status(f"Global Context Update: {message.text[:80]}...",
+                                       "#61afef" if message.role == SYSTEM_ROLE else "#e06c75", True, 4000)
+                return  # Don't proceed to add to a non-existent tab
+            else:
+                logger.error(f"No tab instance for active project '{active_project_id}' when handling new message.")
+                return
+
         target_display_area = target_tab.get_chat_display_area()
         if not target_display_area:
             logger.critical(f"DisplayArea missing for project '{active_project_id}'.")
@@ -299,7 +316,7 @@ class MainWindow(QWidget):
                 if hasattr(mc, '_active_code_generation_tasks') and request_id in mc._active_code_generation_tasks:
                     is_mc_related = True
                 elif hasattr(mc,
-                             '_current_phase') and mc._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS:  # CORRECTED
+                             '_current_phase') and mc._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS:
                     if request_id.startswith("mc_planner_initial_"):
                         is_mc_related = True
 
@@ -309,6 +326,12 @@ class MainWindow(QWidget):
 
         target_tab = self.chat_tab_manager.get_chat_tab_instance(
             active_project_id) if self.chat_tab_manager and active_project_id else None
+
+        if not target_tab and active_project_id == constants.GLOBAL_COLLECTION_ID:
+            logger.info(
+                f"Stream started for Global Context (ReqID: {request_id}), but no project tab is active. Stream placeholder not added to UI.")
+            return
+
         if target_tab:
             display_area = target_tab.get_chat_display_area()
             if display_area and display_area.get_model():
@@ -338,11 +361,16 @@ class MainWindow(QWidget):
                 if hasattr(mc, '_active_code_generation_tasks') and mc._active_code_generation_tasks:
                     is_mc_related = True
                 elif hasattr(mc,
-                             '_current_phase') and mc._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS:  # CORRECTED
+                             '_current_phase') and mc._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS:
                     is_mc_related = True
 
         if is_mc_related:
             logger.debug(f"Stream chunk for MC. Not updating main chat UI. Chunk: '{chunk[:30]}...'")
+            return
+
+        if active_project_id == constants.GLOBAL_COLLECTION_ID:
+            logger.debug(
+                f"Stream chunk for Global Context. Not updating main chat UI as no tab. Chunk: '{chunk[:30]}...'")
             return
 
         target_tab = self.chat_tab_manager.get_chat_tab_instance(active_project_id)
@@ -353,7 +381,9 @@ class MainWindow(QWidget):
             else:
                 logger.error(f"No display area in active tab for project '{active_project_id}' to append chunk.")
         else:
-            logger.error(f"No active tab found for project '{active_project_id}' to append chunk.")    @pyqtSlot()
+            logger.error(f"No active tab found for project '{active_project_id}' to append chunk.")
+
+    @pyqtSlot()
     def _handle_stream_finished(self):
         active_project_id = self.chat_manager.get_current_project_id()
         logger.info(f"MW SLOT _handle_stream_finished for project '{active_project_id}'.")
@@ -363,12 +393,17 @@ class MainWindow(QWidget):
             mc = self.chat_manager._modification_coordinator
             if mc.is_active():
                 if hasattr(mc, '_current_phase') and \
-                   (mc._current_phase == ModPhase.GENERATING_CODE_CONCURRENTLY or \
-                    mc._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS): # CORRECTED
+                        (mc._current_phase == ModPhase.GENERATING_CODE_CONCURRENTLY or \
+                         mc._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS):
                     is_mc_related = True
 
         if is_mc_related:
             logger.debug(f"Stream finished for MC. Not finalizing main chat UI.")
+            return
+
+        if active_project_id == constants.GLOBAL_COLLECTION_ID:
+            logger.debug(f"Stream finished for Global Context. Not finalizing main chat UI as no tab.")
+            self._update_rag_button_state()  # Still update RAG button
             return
 
         if not (self.chat_tab_manager and active_project_id): return
@@ -379,7 +414,8 @@ class MainWindow(QWidget):
                 try:
                     display_area.finalize_stream_in_model()
                 except Exception as e:
-                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'"); self.update_status(
+                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'")
+                    self.update_status(
                         f"Error finalizing stream display: {e}", "#e06c75", True, 5000)
             else:
                 logger.error(f"No display area in active tab for project '{active_project_id}' to finalize stream.")
@@ -455,7 +491,8 @@ class MainWindow(QWidget):
             code_viewer = self.dialog_service.show_code_viewer(ensure_creation=True)
             if code_viewer: code_viewer.update_or_add_file(filename, content)
         except Exception as e:
-            logger.exception(f"Error handling code file update for {filename}: {e}"); self.update_status(
+            logger.exception(f"Error handling code file update for {filename}: {e}")
+            self.update_status(
                 f"Error showing code update: {e}", "#e06c75", True, 5000)
 
     @pyqtSlot(float)
@@ -498,12 +535,12 @@ class MainWindow(QWidget):
     def _close_current_tab_action(self):
         if self.main_tab_widget and self.chat_tab_manager and self.main_tab_widget.count() > 0:
             if (
-            current_idx := self.main_tab_widget.currentIndex()) != -1: self.chat_tab_manager._handle_tab_close_requested(
+                    current_idx := self.main_tab_widget.currentIndex()) != -1: self.chat_tab_manager._handle_tab_close_requested(
                 current_idx)
 
     def update_window_title(self):
         try:
-            base_title = constants.APP_NAME;
+            base_title = constants.APP_NAME
             details = []
             active_chat_backend_id = self.chat_manager.get_current_active_chat_backend_id()
             model_name = self.chat_manager.get_model_for_backend(active_chat_backend_id)
@@ -530,12 +567,14 @@ class MainWindow(QWidget):
                 details.append("RAG")
             self.setWindowTitle(base_title + (f" - [{' | '.join(details)}]" if details else ""))
         except Exception:
-            logger.exception("Error updating window title:"); self.setWindowTitle(constants.APP_NAME)
+            logger.exception("Error updating window title:")
+            self.setWindowTitle(constants.APP_NAME)
 
     def _scan_message_for_code_blocks(self, message: ChatMessage):
         if message.metadata and message.metadata.get("code_block_processed_by_mc"):
             original_file = message.metadata.get("original_filename_for_viewer", "an already processed file")
-            logger.debug(f"MW Code Scan: Skipping message ID {message.id} (role: {message.role}) - already processed by MC for '{original_file}'.")
+            logger.debug(
+                f"MW Code Scan: Skipping message ID {message.id} (role: {message.role}) - already processed by MC for '{original_file}'.")
             return
 
         if not (self.dialog_service and hasattr(self.dialog_service, '_code_viewer_window') and \
@@ -694,6 +733,17 @@ class MainWindow(QWidget):
                 history = self.chat_manager.get_project_history(active_pid)
                 self._rescan_history_for_code_blocks(history)
 
+    # --- NEW SLOT for LLM Terminal ---
+    @pyqtSlot()
+    def _show_llm_terminal_window(self):
+        logger.debug("MainWindow: _show_llm_terminal_window called.")
+        if self.dialog_service:
+            self.dialog_service.show_llm_terminal_window(ensure_creation=True)
+        else:
+            logger.error("MainWindow: DialogService not available to show LLM terminal.")
+
+    # --- END NEW SLOT ---
+
     def _show_rag_viewer(self):
         if self.dialog_service and self.chat_manager and self.chat_manager.is_rag_available():
             rag_viewer_instance = self.dialog_service.show_rag_viewer()
@@ -701,7 +751,7 @@ class MainWindow(QWidget):
                 try:
                     rag_viewer_instance.focusRequested.disconnect(self.chat_manager.set_chat_focus)
                 except TypeError:
-                    pass
+                    pass  # Was not connected
                 rag_viewer_instance.focusRequested.connect(self.chat_manager.set_chat_focus)
         elif self.chat_manager and not self.chat_manager.is_rag_available():
             QMessageBox.information(self, "RAG Not Ready",
