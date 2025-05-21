@@ -1,5 +1,4 @@
 # ui/main_window.py
-# CORRECTED - Fixed _handle_new_session_for_active_tab connection
 import logging
 import os
 import re
@@ -10,7 +9,7 @@ import datetime
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QSplitter, QApplication, QMessageBox,
-    QDialog, QLabel, QStyle, QTabWidget
+    QDialog, QLabel, QStyle, QTabWidget, QFileDialog
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QSize, QEvent, QPoint, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon, QMovie, QCloseEvent, QShortcut, QKeyEvent, QKeySequence, QCursor
@@ -70,7 +69,7 @@ class MainWindow(QWidget):
             self.dialog_service = DialogService(self, self.chat_manager)
         except Exception as e:
             logger.critical(f"Failed to initialize DialogService: {e}", exc_info=True)
-            QApplication.quit();  # type: ignore
+            QApplication.quit()
             return
 
         self._init_ui()
@@ -80,11 +79,11 @@ class MainWindow(QWidget):
                 self.chat_tab_manager = ChatTabManager(self.main_tab_widget, self.chat_manager, self)
             except Exception as e:
                 logger.critical(f"Failed to initialize ChatTabManager: {e}", exc_info=True)
-                QApplication.quit();  # type: ignore
+                QApplication.quit()
                 return
         else:
             logger.critical("main_tab_widget is None after _init_ui. Cannot initialize ChatTabManager.")
-            QApplication.quit();  # type: ignore
+            QApplication.quit()
             return
 
         self._apply_styles()
@@ -183,13 +182,11 @@ class MainWindow(QWidget):
     def _connect_signals(self):
         logger.debug("MainWindow: Connecting signals...")
         if not all([self.chat_manager, self.left_panel, self.dialog_service, self.chat_tab_manager]):
-            logger.critical("Cannot connect signals: Crucial components missing.");
+            logger.critical("Cannot connect signals: Crucial components missing.")
             return
 
         lp = self.left_panel
-        # --- CORRECTED CONNECTION for newSessionClicked ---
         lp.newSessionClicked.connect(self.chat_manager.start_new_chat)
-        # --- END CORRECTION ---
         lp.manageSessionsClicked.connect(self._show_session_manager)
         lp.uploadFileClicked.connect(self._trigger_file_upload)
         lp.uploadDirectoryClicked.connect(self._trigger_dir_upload)
@@ -221,11 +218,10 @@ class MainWindow(QWidget):
         cm.current_project_changed.connect(ctm.ensure_tab_active_and_loaded)
         cm.token_usage_updated.connect(self._handle_token_usage_update)
         cm.code_generation_process_started.connect(self._handle_code_generation_started)
+        cm.request_project_file_save.connect(self._handle_request_project_file_save)
 
         shortcuts = {
-            # --- CORRECTED SHORTCUT for Ctrl+N ---
             "Ctrl+N": self.chat_manager.start_new_chat,
-            # --- END CORRECTION ---
             "Ctrl+O": self._show_session_manager,
             "Ctrl+S": self._trigger_save_session, "Ctrl+Shift+S": self._trigger_save_as_session,
             "Ctrl+U": self._trigger_file_upload, "Ctrl+Shift+U": self._trigger_dir_upload,
@@ -423,7 +419,7 @@ class MainWindow(QWidget):
                 try:
                     display_area.finalize_stream_in_model()
                 except Exception as e:
-                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'");
+                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'")
                     self.update_status(
                         f"Error finalizing stream display: {e}", "#e06c75", True, 5000)
             else:
@@ -500,7 +496,7 @@ class MainWindow(QWidget):
             code_viewer = self.dialog_service.show_code_viewer(ensure_creation=True)
             if code_viewer: code_viewer.update_or_add_file(filename, content)
         except Exception as e:
-            logger.exception(f"Error handling code file update for {filename}: {e}");
+            logger.exception(f"Error handling code file update for {filename}: {e}")
             self.update_status(
                 f"Error showing code update: {e}", "#e06c75", True, 5000)
 
@@ -538,10 +534,6 @@ class MainWindow(QWidget):
         self._update_rag_button_state()
         if self.left_panel: self.left_panel.handle_active_project_ui_update(active_project_id)
 
-    # --- Slot for new session from LeftPanel, now directly connects to ChatManager.start_new_chat ---
-    # def _handle_new_session_for_active_tab(self):
-    #     self.chat_manager.start_new_chat()
-
     def _close_current_tab_action(self):
         if self.main_tab_widget and self.chat_tab_manager and self.main_tab_widget.count() > 0:
             if (
@@ -550,7 +542,7 @@ class MainWindow(QWidget):
 
     def update_window_title(self):
         try:
-            base_title = constants.APP_NAME;
+            base_title = constants.APP_NAME
             details = []
             active_chat_backend_id = self.chat_manager.get_current_active_chat_backend_id()
             model_name = self.chat_manager.get_model_for_backend(active_chat_backend_id)
@@ -577,7 +569,7 @@ class MainWindow(QWidget):
                 details.append("RAG")
             self.setWindowTitle(base_title + (f" - [{' | '.join(details)}]" if details else ""))
         except Exception:
-            logger.exception("Error updating window title:");
+            logger.exception("Error updating window title:")
             self.setWindowTitle(constants.APP_NAME)
 
     def _scan_message_for_code_blocks(self, message: ChatMessage):
@@ -612,7 +604,7 @@ class MainWindow(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape and self.chat_manager and self.chat_manager.is_overall_busy():
-            self.chat_manager._cancel_active_tasks()  # type: ignore
+            self.chat_manager._cancel_active_tasks()
             self.update_status("Attempting cancel...", "#e5c07b", True, 2000)
             event.accept()
         else:
@@ -750,10 +742,10 @@ class MainWindow(QWidget):
             terminal_window = self.dialog_service.show_llm_terminal_window(ensure_creation=True)
             if terminal_window and self._llm_comm_logger_instance:
                 if not hasattr(terminal_window,
-                               '_is_logger_connected') or not terminal_window._is_logger_connected:  # type: ignore
+                               '_is_logger_connected') or not terminal_window._is_logger_connected:
                     try:
                         self._llm_comm_logger_instance.new_terminal_log_entry.connect(terminal_window.add_log_entry)
-                        terminal_window._is_logger_connected = True  # type: ignore
+                        terminal_window._is_logger_connected = True
                         logger.info("MainWindow: Connected LlmTerminalWindow to LlmCommunicationLogger.")
                     except Exception as e:
                         logger.error(f"MainWindow: Failed to connect LlmTerminalWindow to logger: {e}")
@@ -787,3 +779,67 @@ class MainWindow(QWidget):
         if self.dialog_service:
             project_name = self.dialog_service.get_new_project_name()
             if project_name: self.chat_manager.create_project_collection(project_name)
+
+    @pyqtSlot(dict, str)
+    def _handle_request_project_file_save(self, generated_files_data: Dict[str, str], original_query_summary: str):
+        logger.info(f"MainWindow: Received request to save {len(generated_files_data)} files for project '{original_query_summary}'.")
+        if not self.dialog_service:
+            logger.error("DialogService not available to handle file saving.")
+            QMessageBox.critical(self, "Error", "Cannot save files: Dialog service unavailable.")
+            return
+
+        if not generated_files_data:
+            logger.info("No files to save.")
+            self.update_status("No files were generated to save.", "#e5c07b", True, 3000)
+            return
+
+        # Use a title that reflects the original query if possible
+        dialog_title = f"Select Directory to Save Project: '{original_query_summary[:30]}...'"
+        base_directory = self.dialog_service.get_upload_directory_path(dialog_title)
+
+        if not base_directory:
+            logger.info("User cancelled project directory selection.")
+            self.update_status("File saving cancelled by user.", "#e5c07b", True, 3000)
+            return
+
+        logger.info(f"User selected base directory for saving: {base_directory}")
+        files_saved_count = 0
+        errors_occurred = []
+
+        for relative_filepath, content in generated_files_data.items():
+            if content is None: # Should have been filtered by ChatManager, but double check
+                logger.warning(f"Skipping {relative_filepath} as its content is None.")
+                continue
+            try:
+                # Ensure the filepath is treated as relative to the base_directory
+                # os.path.join handles OS-specific separators
+                # Normalize the relative_filepath to handle mixed slashes
+                normalized_relative_path = os.path.normpath(relative_filepath)
+                full_path = os.path.join(base_directory, normalized_relative_path)
+
+                # Create subdirectories if they don't exist
+                file_dir = os.path.dirname(full_path)
+                if file_dir: # Only create if there's a directory part
+                    os.makedirs(file_dir, exist_ok=True)
+
+                with open(full_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                files_saved_count += 1
+                logger.info(f"Successfully saved: {full_path}")
+            except Exception as e:
+                logger.exception(f"Error saving file '{relative_filepath}' to '{full_path}':")
+                errors_occurred.append(f"Error saving '{relative_filepath}': {e}")
+
+        if errors_occurred:
+            error_details = "\n".join(errors_occurred)
+            QMessageBox.warning(self, "File Save Issues",
+                                f"{files_saved_count} file(s) saved successfully.\n"
+                                f"However, some errors occurred:\n{error_details}")
+            self.update_status(f"Project files saved with some errors. Check logs.", "#e06c75", True, 5000)
+        elif files_saved_count > 0:
+            QMessageBox.information(self, "Project Saved",
+                                    f"{files_saved_count} file(s) for project '{original_query_summary}' saved successfully to:\n{base_directory}")
+            self.update_status(f"Project '{original_query_summary}' saved!", "#98c379", True, 4000)
+        else: # Should not happen if generated_files_data was not empty initially
+             QMessageBox.information(self, "No Files Saved", "No files were ultimately saved.")
+             self.update_status("No files were saved from the generation process.", "#e5c07b", True, 3000)

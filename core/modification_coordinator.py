@@ -46,7 +46,7 @@ class ModPhase:
 class ModificationCoordinator(QObject):
     request_llm_call = pyqtSignal(str, list)
     file_ready_for_display = pyqtSignal(str, str)
-    modification_sequence_complete = pyqtSignal(str, str)
+    modification_sequence_complete = pyqtSignal(str, str, dict)
     modification_error = pyqtSignal(str)
     status_update = pyqtSignal(str)
     code_generation_started = pyqtSignal()
@@ -207,7 +207,7 @@ class ModificationCoordinator(QObject):
 
         if self._llm_comm_logger:
             self._llm_comm_logger.log_message("[System]", "Sending request to Planner AI...")
-            if len(prompt_text) < 1000: # Log shorter prompts for easier debugging
+            if len(prompt_text) < 1000:
                  self._llm_comm_logger.log_message("[Planner AI Req Full Prompt]", prompt_text)
             else:
                  self._llm_comm_logger.log_message("[Planner AI Req Summary]", f"Prompt length: {len(prompt_text)}, starts with: '{prompt_text[:200]}...'")
@@ -239,7 +239,7 @@ class ModificationCoordinator(QObject):
         if self._llm_comm_logger:
             self._llm_comm_logger.log_message("[Planner AI Res]",
                                               f"Received plan. Length: {len(self._full_planner_output_text)}. Parsing...")
-            if len(self._full_planner_output_text) < 2000: # Log shorter responses
+            if len(self._full_planner_output_text) < 2000:
                 self._llm_comm_logger.log_message("[Planner AI Res Full]", self._full_planner_output_text)
 
         parsed_files_list, error_msg_parse_files = self._parse_files_to_modify_list(self._full_planner_output_text)
@@ -249,7 +249,7 @@ class ModificationCoordinator(QObject):
             if self._llm_comm_logger:
                 self._llm_comm_logger.log_message("[System Error]",
                                                   f"Failed to parse FILES_TO_MODIFY list: {error_msg_parse_files}")
-            self._handle_sequence_end("error_plan_parsing", err_msg_ui)
+            self._handle_sequence_end("error_plan_parsing", err_msg_ui, {})
             return
 
         self._planned_files_list = parsed_files_list
@@ -257,7 +257,7 @@ class ModificationCoordinator(QObject):
             self.status_update.emit("[System: Planner AI indicates no file modifications are needed.]")
             if self._llm_comm_logger:
                 self._llm_comm_logger.log_message("[Planner AI]", "Plan indicates no files need modification.")
-            self._handle_sequence_end("completed_no_files_in_plan", "Planner found no files to modify.")
+            self._handle_sequence_end("completed_no_files_in_plan", "Planner found no files to modify.", {})
             return
 
         files_str_display = ", ".join([f"`{f}`" for f in self._planned_files_list])
@@ -287,7 +287,7 @@ class ModificationCoordinator(QObject):
                         pass
                     else:
                         instruction_text = self._full_planner_output_text[start_idx_content:end_idx_find].strip()
-                        current_search_pos = end_idx_find + len(end_marker) # Update search position
+                        current_search_pos = end_idx_find + len(end_marker)
             except Exception as e_extract:
                 logger.error(f"Error during marker extraction for {filename_in_list}: {e_extract}")
                 pass
@@ -313,7 +313,7 @@ class ModificationCoordinator(QObject):
                     self._llm_comm_logger.log_message("[System Error]",
                                                       "Planner AI failed to provide valid instructions for ANY planned files. Sequence cannot proceed.")
                 self._handle_sequence_end("error_no_valid_coder_instructions",
-                                          "No valid Coder AI instructions received.")
+                                          "No valid Coder AI instructions received.", {})
                 return
             else:
                 self.modification_error.emit(
@@ -329,7 +329,7 @@ class ModificationCoordinator(QObject):
                 self._llm_comm_logger.log_message("[System Error]",
                                                   "No valid Coder AI instructions found for any file after parsing. Sequence cannot proceed.")
             self._handle_sequence_end("error_no_valid_coder_instructions_after_check",
-                                      "No valid Coder AI instructions for any file.")
+                                      "No valid Coder AI instructions for any file.", {})
             return
 
         self._current_phase = ModPhase.GENERATING_CODE_CONCURRENTLY
@@ -425,8 +425,7 @@ class ModificationCoordinator(QObject):
         if rag_examples_str:
             final_coder_prompt_parts.append(rag_examples_str)
 
-        is_new_file_from_planner_instr = "new file: yes" in coder_instruction_for_file.lower() or \
-                                         "is new file: yes" in coder_instruction_for_file.lower()
+        is_new_file_from_planner_instr = "is new file: yes" in coder_instruction_for_file.lower()
 
         if original_file_content is not None:
             if is_new_file_from_planner_instr:
@@ -441,7 +440,7 @@ class ModificationCoordinator(QObject):
                 f"You MUST use this original content as the foundation and apply the necessary modifications "
                 f"as detailed in the instructions below.\n\n"
             )
-        elif not is_new_file_from_planner_instr: # Planner said "Is New File: No" but file doesn't exist
+        elif not is_new_file_from_planner_instr:
             final_coder_prompt_parts.append(
                 f"The file `{filename}` was planned as an UPDATE (Is New File: No), but no original content was found. "
                 f"Therefore, treat this as a NEW file creation, following the instructions below.\n\n"
@@ -449,7 +448,7 @@ class ModificationCoordinator(QObject):
             if self._llm_comm_logger:
                 self._llm_comm_logger.log_message("[System Info]",
                                                   f"File '{filename}' planned as update, but no original content found. Treating as new.")
-        else: # Planner said "Is New File: Yes" and file doesn't exist (normal new file case)
+        else:
             final_coder_prompt_parts.append(
                 f"The file `{filename}` is NEW (Is New File: Yes). Create it from scratch based on the instructions below.\n\n"
             )
@@ -599,7 +598,7 @@ class ModificationCoordinator(QObject):
                     self._llm_comm_logger.log_message("[System Process]",
                                                       "All planned files processed (some with pre-existing instruction errors). Awaiting user action.")
             else:
-                self._handle_sequence_end("error_no_files_to_process_concurrently", "No files to process.")
+                self._handle_sequence_end("error_no_files_to_process_concurrently", "No files to process.", {})
             return
 
         results = await asyncio.gather(*tasks_to_run, return_exceptions=True)
@@ -748,14 +747,14 @@ class ModificationCoordinator(QObject):
                 if self._llm_comm_logger:
                     self._llm_comm_logger.log_message("[System Error]",
                                                       f"Unexpected LLM response. Backend: {backend_id}, Phase: {self._current_phase}.")
-                self._handle_sequence_end("error_unexpected_response_phase", err_msg)
+                self._handle_sequence_end("error_unexpected_response_phase", err_msg, {})
         except Exception as e:
             self._is_awaiting_llm = False
             if self._llm_comm_logger:
                 self._llm_comm_logger.log_message("[System Error]",
                                                   f"Error processing LLM response from {backend_id}: {e}")
             logger.exception(f"MC: Error processing LLM response from {backend_id}:")
-            self._handle_sequence_end("error_processing_llm_response", f"Error processing {backend_id} response: {e}")
+            self._handle_sequence_end("error_processing_llm_response", f"Error processing {backend_id} response: {e}", {})
 
     def process_llm_error(self, backend_id: str, error_message: str):
         if not self._is_active or not self._is_awaiting_llm:
@@ -771,11 +770,11 @@ class ModificationCoordinator(QObject):
         if phase_at_error == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS and backend_id == PLANNER_BACKEND_ID:
             err_msg_ui = f"Planner AI Error: {error_message}. Cannot proceed with modification."
             self.modification_error.emit(err_msg_ui)
-            self._handle_sequence_end("error_planner_ai_failed", err_msg_ui)
+            self._handle_sequence_end("error_planner_ai_failed", err_msg_ui, {})
         else:
             err_msg_ui = f"Unexpected LLM Error from '{backend_id}' during phase '{phase_at_error}': {error_message}"
             self.modification_error.emit(err_msg_ui)
-            self._handle_sequence_end("error_unexpected_llm_error_phase", err_msg_ui)
+            self._handle_sequence_end("error_unexpected_llm_error_phase", err_msg_ui, {})
 
     def process_user_input(self, user_command: str):
         if not self._is_active: return
@@ -793,14 +792,14 @@ class ModificationCoordinator(QObject):
 
         if command_lower in ["cancel", "stop", "abort"]:
             if self._llm_comm_logger: self._llm_comm_logger.log_message("[User Action]", "Cancellation requested.")
-            self._handle_sequence_end("cancelled_by_user", "User cancelled the modification process.")
+            self._handle_sequence_end("cancelled_by_user", "User cancelled the modification process.", {})
             return
 
         if self._current_phase == ModPhase.ALL_FILES_GENERATED_AWAITING_USER_ACTION:
             if command_lower in ["accept", "done", "looks good", "ok", "okay", "proceed", "complete", "finalize"]:
                 if self._llm_comm_logger: self._llm_comm_logger.log_message("[User Action]",
                                                                             "All generated files accepted.")
-                self._handle_sequence_end("completed_by_user_acceptance", "User accepted all generated files.")
+                self._handle_sequence_end("completed_by_user_acceptance", "User accepted all generated files.", self._generated_file_data)
             else:
                 self.status_update.emit(
                     f"[System: Received overall feedback: \"{user_command[:50]}...\". Requesting full re-plan...]")
@@ -842,9 +841,8 @@ class ModificationCoordinator(QObject):
     def _parse_files_to_modify_list(self, response_text: str) -> Tuple[Optional[List[str]], Optional[str]]:
         marker = "FILES_TO_MODIFY:"
         try:
-            # Try to find the marker case-sensitively first
             marker_pos = response_text.find(marker)
-            if marker_pos == -1: # If not found, try case-insensitively
+            if marker_pos == -1:
                  match_marker_re = re.search(r"FILES_TO_MODIFY\s*:", response_text, re.IGNORECASE)
                  if not match_marker_re:
                      return None, f"Marker '{marker}' (case-sensitive or insensitive) not found in Planner response."
@@ -852,7 +850,7 @@ class ModificationCoordinator(QObject):
             else:
                 list_str_start = marker_pos + len(marker)
 
-        except ValueError: # Should not happen with find if it returns -1
+        except ValueError:
             return None, f"Marker '{marker}' not found in Planner response (ValueError)."
 
 
@@ -865,23 +863,20 @@ class ModificationCoordinator(QObject):
         if list_match_bracket:
             list_str_for_eval = list_match_bracket.group(1)
         else:
-            # If not on the first line, try to find the list using a more general regex
-            # looking for a Python list structure that might span multiple lines
-            # or be preceded by some conversational text.
             multiline_list_match = re.search(r"\[\s*(?:(?:'.*?'|\".*?\")\s*,\s*)*\s*(?:'.*?'|\".*?\")?\s*\]", potential_list_str, re.DOTALL)
             if multiline_list_match:
-                list_str_for_eval = multiline_list_match.group(0) # group(0) is the whole match
+                list_str_for_eval = multiline_list_match.group(0)
             else:
                 return None, "FILES_TO_MODIFY list not found or not correctly formatted with brackets starting on the first line or as a recognizable Python list after the marker."
         try:
-            if list_str_for_eval.lower().startswith("python"): # Remove potential 'python' prefix
+            if list_str_for_eval.lower().startswith("python"):
                 list_str_for_eval = re.sub(r"^[Pp][Yy][Tt][Hh][Oo][Nn]\s*", "", list_str_for_eval)
 
             parsed_list = ast.literal_eval(list_str_for_eval)
             if not isinstance(parsed_list, list):
                 return None, "Parsed data for FILES_TO_MODIFY is not a list."
             cleaned_list = [str(f).strip().replace("\\", "/") for f in parsed_list if isinstance(f, (str, int, float))]
-            return [f_item for f_item in cleaned_list if f_item], None # Filter out empty strings
+            return [f_item for f_item in cleaned_list if f_item], None
         except (ValueError, SyntaxError, TypeError) as e:
             return None, f"Error parsing FILES_TO_MODIFY list string '{list_str_for_eval}': {e}"
 
@@ -889,15 +884,18 @@ class ModificationCoordinator(QObject):
         if not self._is_active: return
         if self._llm_comm_logger:
             self._llm_comm_logger.log_message("[System Process]", f"Sequence cancelled. Reason: {reason}")
-        self._handle_sequence_end(reason, f"Sequence cancelled: {reason}")
+        self._handle_sequence_end(reason, f"Sequence cancelled: {reason}", {})
 
-    def _handle_sequence_end(self, reason: str, details: Optional[str] = None):
-        if not self._is_active and reason != "error_processing_llm_response": # Allow error processing even if not active
+    def _handle_sequence_end(self, reason: str, details: Optional[str] = None, generated_files_data: Optional[Dict[str, Tuple[Optional[str], Optional[str]]]] = None):
+        if not self._is_active and reason != "error_processing_llm_response":
             return
 
         log_message = f"MC: Ending sequence. Reason: {reason}."
         if details: log_message += f" Details: {details}"
         logger.info(log_message)
+
+        effective_generated_files = generated_files_data if generated_files_data is not None else {}
+
 
         if self._llm_comm_logger:
             self._llm_comm_logger.log_message("[System Process]",
@@ -912,5 +910,5 @@ class ModificationCoordinator(QObject):
         original_query_summary = self._original_query_at_start[:75] + '...' if self._original_query_at_start and len(
             self._original_query_at_start) > 75 else self._original_query_at_start or "User's request"
 
-        self.modification_sequence_complete.emit(reason, original_query_summary)
+        self.modification_sequence_complete.emit(reason, original_query_summary, effective_generated_files)
         self._reset_state()
