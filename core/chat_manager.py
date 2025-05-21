@@ -222,9 +222,6 @@ class ChatManager(QObject):
             return self._orchestrator.get_llm_communication_logger()
         return None
 
-    # core/chat_manager.py
-    # PART 2 of 2
-
     def initialize(self):
         if not (
                 self._session_flow_manager and self._project_context_manager and self._user_input_handler and self._backend_coordinator):
@@ -748,7 +745,6 @@ class ChatManager(QObject):
 
     @pyqtSlot(str, str, dict)
     def _handle_mc_sequence_complete(self, reason: str, original_query_summary: str, generated_files_data: dict):
-        # First, handle displaying the general completion message
         if self._project_context_manager:
             strengthened_system_message_text = (
                 f"[System: Task '{original_query_summary}' (multi-file code modification) is now FULLY COMPLETED and CLOSED. Reason for completion: {reason}. All generated code is in the Code Viewer. IMPORTANT: The user is now expected to start a NEW, unrelated conversation or ask a new question. Ava, your role is to transition to a fresh, open-ended conversational state. Acknowledge completion if the user mentions it, then wait for their NEXT independent query. DO NOT re-describe, re-summarize, or offer to continue the '{original_query_summary}' task. Consider the previous task context as concluded.]")
@@ -763,9 +759,9 @@ class ChatManager(QObject):
                 priming_model_message_text = f"Great! All changes for '{original_query_summary}' are accepted. What's next on your list? 🚀"
             elif reason == "completed_no_files":
                 priming_model_message_text = f"Okay, it looks like no changes were actually needed for '{original_query_summary}'. What can I help you with now? ✨"
-            elif reason == "completed": # Generic successful completion
+            elif reason == "completed":
                 priming_model_message_text = f"Alright, all done with the '{original_query_summary}' task! What's next on your list? 🚀"
-            else: # Error cases or cancellations
+            else:
                 priming_model_message_text = f"The task '{original_query_summary}' has finished ({reason}). What shall we do next?"
 
             if priming_model_message_text:
@@ -777,11 +773,10 @@ class ChatManager(QObject):
         self.update_status_based_on_state()
         if self._modification_handler_instance: self._modification_handler_instance.cancel_modification()
 
-        # Now, handle the file saving if applicable
         if reason in ["completed_by_user_acceptance", "completed"] and generated_files_data:
             successful_files_to_save = {
                 filename: data_tuple[0] for filename, data_tuple in generated_files_data.items()
-                if data_tuple and data_tuple[0] is not None and data_tuple[1] is None # content is not None, error is None
+                if data_tuple and data_tuple[0] is not None and data_tuple[1] is None
             }
             if successful_files_to_save:
                 logger.info(f"ChatManager: Requesting MainWindow to handle saving of {len(successful_files_to_save)} generated files.")
@@ -1087,3 +1082,37 @@ class ChatManager(QObject):
 
     def is_api_ready(self) -> bool:
         return self._chat_backend_configured_successfully.get(self._current_active_chat_backend_id, False)
+
+    def resync_project_files_in_rag(self, file_paths: List[str]):
+        """
+        Requests the UploadCoordinator to re-process (update) specific files
+        in the RAG for the currently active project.
+        """
+        if not self._upload_coordinator:
+            logger.error("Cannot resync RAG files: UploadCoordinator not available.")
+            self.error_occurred.emit("RAG update service not available.", False)
+            return
+
+        if not self._project_context_manager:
+            logger.error("Cannot resync RAG files: ProjectContextManager not available.")
+            self.error_occurred.emit("Project context service not available for RAG update.", False)
+            return
+
+        current_project_id = self._project_context_manager.get_active_project_id()
+        if not current_project_id or current_project_id == constants.GLOBAL_COLLECTION_ID:
+            logger.info(f"RAG resync requested, but current project is Global or undefined ('{current_project_id}'). No specific project RAG to update.")
+            # Optionally, inform the user that global RAG isn't automatically updated this way
+            # self.status_update.emit("Global RAG not updated by this action. Use 'Manage Global Knowledge'.", "#e5c07b", True, 4000)
+            return
+
+        if not file_paths:
+            logger.info("RAG resync requested, but no file paths were provided.")
+            return
+
+        logger.info(f"ChatManager: Requesting RAG resync for {len(file_paths)} files in project '{current_project_id}'.")
+        # The UploadCoordinator's process_files_for_current_project (which calls UploadService)
+        # should handle adding/updating these files in the RAG for the current project.
+        # We assume UploadService will correctly update existing entries if files are re-added.
+        # This relies on VectorDBService handling potential duplicates or updates correctly.
+        self._upload_coordinator.upload_files_to_current_project(file_paths)
+        self.status_update.emit(f"Updating RAG for project '{self._project_context_manager.get_project_name(current_project_id)}' with {len(file_paths)} file(s)...", "#61afef", True, 4000)

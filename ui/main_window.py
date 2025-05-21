@@ -793,9 +793,13 @@ class MainWindow(QWidget):
             self.update_status("No files were generated to save.", "#e5c07b", True, 3000)
             return
 
-        # Use a title that reflects the original query if possible
         dialog_title = f"Select Directory to Save Project: '{original_query_summary[:30]}...'"
-        base_directory = self.dialog_service.get_upload_directory_path(dialog_title)
+        base_directory = QFileDialog.getExistingDirectory(
+            self,
+            dialog_title,
+            os.path.expanduser("~"),
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        )
 
         if not base_directory:
             logger.info("User cancelled project directory selection.")
@@ -805,26 +809,23 @@ class MainWindow(QWidget):
         logger.info(f"User selected base directory for saving: {base_directory}")
         files_saved_count = 0
         errors_occurred = []
+        successfully_saved_paths: List[str] = []
 
         for relative_filepath, content in generated_files_data.items():
-            if content is None: # Should have been filtered by ChatManager, but double check
+            if content is None:
                 logger.warning(f"Skipping {relative_filepath} as its content is None.")
                 continue
             try:
-                # Ensure the filepath is treated as relative to the base_directory
-                # os.path.join handles OS-specific separators
-                # Normalize the relative_filepath to handle mixed slashes
                 normalized_relative_path = os.path.normpath(relative_filepath)
                 full_path = os.path.join(base_directory, normalized_relative_path)
-
-                # Create subdirectories if they don't exist
                 file_dir = os.path.dirname(full_path)
-                if file_dir: # Only create if there's a directory part
+                if file_dir:
                     os.makedirs(file_dir, exist_ok=True)
 
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 files_saved_count += 1
+                successfully_saved_paths.append(full_path)
                 logger.info(f"Successfully saved: {full_path}")
             except Exception as e:
                 logger.exception(f"Error saving file '{relative_filepath}' to '{full_path}':")
@@ -840,6 +841,18 @@ class MainWindow(QWidget):
             QMessageBox.information(self, "Project Saved",
                                     f"{files_saved_count} file(s) for project '{original_query_summary}' saved successfully to:\n{base_directory}")
             self.update_status(f"Project '{original_query_summary}' saved!", "#98c379", True, 4000)
-        else: # Should not happen if generated_files_data was not empty initially
+        else:
              QMessageBox.information(self, "No Files Saved", "No files were ultimately saved.")
              self.update_status("No files were saved from the generation process.", "#e5c07b", True, 3000)
+
+        if successfully_saved_paths and self.chat_manager:
+            current_project_id = self.chat_manager.get_current_project_id()
+            if current_project_id and current_project_id != constants.GLOBAL_COLLECTION_ID:
+                logger.info(f"Requesting RAG re-sync for {len(successfully_saved_paths)} files in project '{current_project_id}'.")
+                if hasattr(self.chat_manager, 'resync_project_files_in_rag'):
+                    self.chat_manager.resync_project_files_in_rag(successfully_saved_paths)
+                else:
+                    logger.error("ChatManager does not have 'resync_project_files_in_rag' method.")
+                    self.update_status("Files saved, but RAG sync method missing in ChatManager.", "#e06c75", True, 5000)
+            else:
+                logger.info("Project is Global or no active project; RAG resync for saved files skipped by MainWindow.")
