@@ -1,5 +1,5 @@
 # Llama_Syn/services/file_handler_service.py
-# NEW FILE - Handles reading content from different file types
+# UPDATED FILE - Added write_file_content method
 
 import logging
 import os
@@ -65,9 +65,10 @@ class FileHandlerService:
                 err_msg = f"File > {max_size_mb}MB"
                 logger.warning(f"{err_msg}: '{display_name}' ({file_size / (1024 * 1024):.2f}MB)")
                 return None, "error", err_msg
-            if file_size == 0:
-                logger.warning(f"File empty: '{display_name}'");
-                return None, "error", "File empty"
+            # Allow reading empty files, but chunking service might skip them.
+            # if file_size == 0:
+            #     logger.warning(f"File empty: '{display_name}'");
+            #     return "", "text", None # Return empty string for empty text files
         except OSError as e:
             err_msg = f"OS Error (size): {e}";
             logger.error(f"Error getting size for '{display_name}': {e}");
@@ -86,16 +87,25 @@ class FileHandlerService:
                     logger.info(f"Reading {num_pages} pages from PDF: '{display_name}'")
                     for page_num in range(num_pages):
                         try:
-                            content_list.append(reader.pages[page_num].extract_text() or "")
+                            page_text = reader.pages[page_num].extract_text()
+                            if page_text:  # Only append if text was extracted
+                                content_list.append(page_text)
                         except Exception as e_page:
                             logger.warning(
                                 f"Error extracting text from page {page_num + 1} of '{display_name}': {e_page}")
                 pdf_content = "\n\n--- Page Break ---\n\n".join(content_list).strip()
-                if not pdf_content:
-                    logger.warning(f"No text extracted from PDF: '{display_name}'")
-                    return None, "error", "No text extracted from PDF"
+                if not pdf_content and num_pages > 0:  # If pages exist but no text extracted
+                    logger.warning(
+                        f"No text extracted from PDF: '{display_name}' (it may be image-based or protected).")
+                    return None, "error", "No text extracted (image-based or protected?)"
+                elif not pdf_content and num_pages == 0:  # Empty PDF
+                    logger.warning(f"PDF file is empty (0 pages): '{display_name}'")
+                    return "", "text", None  # Treat as empty text file
                 logger.info(f"Successfully extracted text from PDF: '{display_name}' (Length: {len(pdf_content)})")
                 return pdf_content, "text", None
+            except PyPDF2.errors.PdfReadError as e_pdf_read:  # Specific PyPDF2 read error
+                logger.error(f"PyPDF2 PdfReadError for '{display_name}': {e_pdf_read}")
+                return None, "error", f"Invalid PDF: {e_pdf_read}"
             except Exception as e_pdf:
                 logger.exception(f"Error reading PDF '{display_name}': {e_pdf}")
                 return None, "error", f"PDF Read Error: {e_pdf}"
@@ -108,14 +118,22 @@ class FileHandlerService:
             try:
                 logger.info(f"Reading DOCX file: '{display_name}'")
                 document = docx.Document(file_path)
-                content_list = [p.text for p in document.paragraphs if p.text]
-                docx_content = "\n\n".join(content_list).strip()  # Join paragraphs with double newline
-                if not docx_content:
-                    logger.warning(f"No text extracted from DOCX: '{display_name}'")
-                    return None, "error", "No text extracted from DOCX"
+                content_list = [p.text for p in document.paragraphs if
+                                p.text.strip()]  # Ensure paragraph has stripped content
+                docx_content = "\n\n".join(content_list).strip()
+                if not docx_content and len(document.paragraphs) > 0:
+                    logger.warning(
+                        f"No text extracted from DOCX: '{display_name}' (it may be empty or structured differently).")
+                    # We return "" for empty text docx, error if unreadable.
+                    # If it's truly empty but readable, it's not an error.
+                    # If it has structure but no text (e.g. only images), it's not an error for FileHandler.
+                    return "", "text", None
+                elif not docx_content and len(document.paragraphs) == 0:
+                    logger.warning(f"DOCX file appears empty (0 paragraphs): '{display_name}'")
+                    return "", "text", None
                 logger.info(f"Successfully extracted text from DOCX: '{display_name}' (Length: {len(docx_content)})")
                 return docx_content, "text", None
-            except Exception as e_docx:
+            except Exception as e_docx:  # Catch specific docx errors if library provides them
                 logger.exception(f"Error reading DOCX '{display_name}': {e_docx}")
                 return None, "error", f"DOCX Read Error: {e_docx}"
 
@@ -124,9 +142,8 @@ class FileHandlerService:
             try:
                 with open(file_path, "r", encoding="utf-8", errors='strict') as f:
                     content = f.read()
-                    # Basic check for null bytes to guess if binary
-                    if '\x00' in content[:1024]:
-                        logger.warning(f"File likely binary (null bytes found): '{display_name}'");
+                    if '\x00' in content[:1024]:  # Check for null bytes
+                        logger.warning(f"File likely binary (null bytes found in UTF-8 read): '{display_name}'");
                         return None, "binary", None
                     return content, "text", None
             except UnicodeDecodeError:
@@ -143,7 +160,7 @@ class FileHandlerService:
                     err_msg = f"Fallback read failed: {e_fallback}"
                     logger.warning(
                         f"Failed read '{display_name}' with fallback. Treating as binary/unreadable. Error: {err_msg}")
-                    return None, "binary", err_msg  # Treat as binary if fallback fails
+                    return None, "binary", err_msg
             except FileNotFoundError:
                 logger.error(f"File not found during read: '{display_name}'");
                 return None, "error", "File not found"
@@ -156,8 +173,51 @@ class FileHandlerService:
                 logger.exception(f"Unexpected read error '{display_name}': {e_gen}");
                 return None, "error", err_msg
 
-    # Potential future methods:
-    # def read_image_content_ocr(self, file_path: str) -> Tuple[Optional[str], str, Optional[str]]:
-    #     """ Reads image content using Tesseract OCR. """
-    #     # Implementation would go here, requiring pytesseract and Pillow
-    #     pass
+    # --- NEW METHOD ---
+    def write_file_content(self, file_path: str, content: str) -> Tuple[bool, Optional[str]]:
+        """
+        Writes string content to a file. Creates parent directories if they don't exist.
+
+        Args:
+            file_path: The absolute path to the file to be written.
+            content: The string content to write.
+
+        Returns:
+            A tuple: (success_flag, error_message_or_none)
+        """
+        display_name = os.path.basename(file_path)
+        logger.info(f"Attempting to write content to file: '{file_path}' (Length: {len(content)})")
+
+        if not isinstance(file_path, str) or not file_path.strip():
+            err = "Invalid file path provided for writing."
+            logger.error(err)
+            return False, err
+
+        if not isinstance(content, str):
+            # While technically you could write non-str, for our purposes it should be str.
+            err = f"Invalid content type for writing to '{display_name}': Expected str, got {type(content)}."
+            logger.error(err)
+            return False, err
+
+        try:
+            # Ensure parent directory exists
+            parent_dir = os.path.dirname(file_path)
+            if parent_dir:  # Only create if parent_dir is not empty (e.g. for files in root)
+                os.makedirs(parent_dir, exist_ok=True)
+                logger.debug(f"Ensured directory exists: {parent_dir}")
+
+            # Write the file
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            logger.info(f"Successfully wrote content to '{display_name}'.")
+            return True, None
+        except OSError as e_os:
+            err_msg = f"OS Error writing file '{display_name}': {e_os}"
+            logger.error(err_msg, exc_info=True)
+            return False, err_msg
+        except Exception as e_gen:
+            err_msg = f"Unexpected error writing file '{display_name}': {e_gen}"
+            logger.error(err_msg, exc_info=True)
+            return False, err_msg
+    # --- END NEW METHOD ---

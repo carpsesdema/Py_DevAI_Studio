@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QDialog, QLabel, QStyle, QTabWidget, QFileDialog
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QSize, QEvent, QPoint, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon, QMovie, QCloseEvent, QShortcut, QKeyEvent, QKeySequence, QCursor
+from PyQt6.QtGui import QFont, QIcon, QMovie, QCloseEvent, QShortcut, QKeySequence, QKeyEvent, QCursor
 
 try:
     from core.chat_manager import ChatManager
@@ -22,8 +22,11 @@ try:
     from .dialog_service import DialogService
     from .chat_tab_manager import ChatTabManager
     from utils import constants
-    from core.modification_coordinator import ModPhase
+    from core.modification_coordinator import ModPhase, \
+        ModificationCoordinator  # Ensure ModificationCoordinator is imported for type hints
     from services.llm_communication_logger import LlmCommunicationLogger
+    # Ensure ChangeApplierService is imported for type hints if needed by connected signals
+    from core.change_applier_service import ChangeApplierService
 except ImportError as e:
     logging.basicConfig(level=logging.DEBUG)
     logging.critical(f"CRITICAL IMPORT ERROR in main_window.py: {e}", exc_info=True)
@@ -56,6 +59,16 @@ class MainWindow(QWidget):
         self.main_tab_widget: Optional[QTabWidget] = None
         self.chat_tab_manager: Optional[ChatTabManager] = None
         self._llm_comm_logger_instance: Optional[LlmCommunicationLogger] = None
+        # --- NEW: Store context from ModificationCoordinator for CodeViewer ---
+        # These were intended to bridge context to CodeViewer when apply_change_requested is emitted.
+        # However, with CodeViewerWindow now directly receiving this context via update_or_add_file
+        # and emitting it with its apply_change_requested signal, these might become redundant
+        # if _handle_code_viewer_apply_request directly uses the signal parameters.
+        # Let's keep them for now as part of incorporating the previous diff's intent,
+        # but be aware we might simplify this if CVW passes all needed info.
+        self._mc_current_project_id: Optional[str] = None
+        self._mc_current_focus_prefix: Optional[str] = None
+        # --- END NEW ---
         if self.chat_manager:
             self._llm_comm_logger_instance = self.chat_manager.get_llm_communication_logger()
             if not self._llm_comm_logger_instance:
@@ -220,6 +233,27 @@ class MainWindow(QWidget):
         cm.code_generation_process_started.connect(self._handle_code_generation_started)
         cm.request_project_file_save.connect(self._handle_request_project_file_save)
 
+        # --- NEW: Connect signals from ChangeApplierService if it exists ---
+        if (cm_cas := cm.get_change_applier_service()):  # Python 3.8+ walrus operator
+            cm_cas.file_applied_successfully.connect(self._handle_cas_file_applied_successfully)
+            cm_cas.file_application_failed.connect(self._handle_cas_file_application_failed)
+            cm_cas.rag_sync_initiated.connect(self._handle_cas_rag_sync_initiated)
+        # --- END NEW ---
+
+        if cm._user_input_handler and cm._modification_coordinator:
+            cm._user_input_handler.bootstrap_sequence_start_requested.connect(
+                cm._modification_coordinator.start_sequence_for_bootstrap
+            )
+            cm._user_input_handler.modification_existing_sequence_start_requested.connect(
+                cm._modification_coordinator.start_sequence_for_modification
+            )
+            cm._user_input_handler.modification_user_input_received.connect(
+                cm._modification_coordinator.process_user_input
+            )
+        else:
+            logger.error(
+                "MainWindow: Could not connect UserInputHandler signals to ModificationCoordinator (missing instance).")
+
         shortcuts = {
             "Ctrl+N": self.chat_manager.start_new_chat,
             "Ctrl+O": self._show_session_manager,
@@ -276,13 +310,9 @@ class MainWindow(QWidget):
                 return
 
         target_display_area = target_tab.get_chat_display_area()
-        if not target_display_area:
-            logger.critical(f"DisplayArea missing for project '{active_project_id}'.")
-            return
+        if not target_display_area: logger.critical(f"DisplayArea missing for project '{active_project_id}'."); return
         model = target_display_area.get_model()
-        if not model:
-            logger.critical(f"ChatListModel missing for project '{active_project_id}'.")
-            return
+        if not model: logger.critical(f"ChatListModel missing for project '{active_project_id}'."); return
 
         is_internal_system_message = message.metadata and message.metadata.get("is_internal", False)
         if is_internal_system_message:
@@ -293,10 +323,8 @@ class MainWindow(QWidget):
             existing_row = model.find_message_row_by_id(message.id)
             if existing_row is not None:
                 logger.debug(f"Found existing AI message (ID: {message.id}) at row {existing_row}. Updating.")
-                if message.metadata and "is_streaming" in message.metadata:
-                    del message.metadata["is_streaming"]
-                if message.loading_state == MessageLoadingState.LOADING:
-                    message.loading_state = MessageLoadingState.COMPLETED
+                if message.metadata and "is_streaming" in message.metadata: del message.metadata["is_streaming"]
+                if message.loading_state == MessageLoadingState.LOADING: message.loading_state = MessageLoadingState.COMPLETED
                 target_display_area.update_message_in_model(existing_row, message)
             else:
                 logger.debug(f"Adding new AI message (ID: {message.id}) to model.")
@@ -419,8 +447,7 @@ class MainWindow(QWidget):
                 try:
                     display_area.finalize_stream_in_model()
                 except Exception as e:
-                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'")
-                    self.update_status(
+                    logger.exception(f"ERROR finalizing stream for project '{active_project_id}'"); self.update_status(
                         f"Error finalizing stream display: {e}", "#e06c75", True, 5000)
             else:
                 logger.error(f"No display area in active tab for project '{active_project_id}' to finalize stream.")
@@ -474,8 +501,7 @@ class MainWindow(QWidget):
         logger.debug(
             f"MW Slot: Handling config state. Backend: {backend_id}, Model: {model_name}, ConfigOK: {is_configured}, PersActive: {personality_is_active}")
         if backend_id == self.chat_manager.get_current_active_chat_backend_id():
-            if self.left_panel:
-                self.left_panel.update_personality_tooltip(active=personality_is_active)
+            if self.left_panel: self.left_panel.update_personality_tooltip(active=personality_is_active)
             self.update_window_title()
         self._update_rag_button_state()
 
@@ -492,9 +518,25 @@ class MainWindow(QWidget):
     def _handle_code_file_update(self, filename: str, content: str):
         logger.info(f"MW Slot: Received updated code for '{filename}'")
         if not self.dialog_service: return
+
+        is_ai_modification = False
+        original_content_for_diff: Optional[str] = None
+        project_id_for_apply: Optional[str] = None
+        focus_prefix_for_apply: Optional[str] = None
+
+        if self.chat_manager and (
+        mc := self.chat_manager.get_modification_coordinator()) and mc.is_active():  # type: ignore
+            is_ai_modification = True
+            original_content_for_diff = mc._original_file_contents.get(filename)
+            project_id_for_apply = self.chat_manager.get_current_project_id()
+            focus_prefix_for_apply = mc._original_focus_prefix
+
         try:
             code_viewer = self.dialog_service.show_code_viewer(ensure_creation=True)
-            if code_viewer: code_viewer.update_or_add_file(filename, content)
+            if code_viewer:
+                code_viewer.update_or_add_file(filename, content,
+                                               is_ai_modification, original_content_for_diff,
+                                               project_id_for_apply, focus_prefix_for_apply)
         except Exception as e:
             logger.exception(f"Error handling code file update for {filename}: {e}")
             self.update_status(
@@ -537,7 +579,7 @@ class MainWindow(QWidget):
     def _close_current_tab_action(self):
         if self.main_tab_widget and self.chat_tab_manager and self.main_tab_widget.count() > 0:
             if (
-                    current_idx := self.main_tab_widget.currentIndex()) != -1: self.chat_tab_manager._handle_tab_close_requested(
+            current_idx := self.main_tab_widget.currentIndex()) != -1: self.chat_tab_manager._handle_tab_close_requested(
                 current_idx)
 
     def update_window_title(self):
@@ -569,8 +611,7 @@ class MainWindow(QWidget):
                 details.append("RAG")
             self.setWindowTitle(base_title + (f" - [{' | '.join(details)}]" if details else ""))
         except Exception:
-            logger.exception("Error updating window title:")
-            self.setWindowTitle(constants.APP_NAME)
+            logger.exception("Error updating window title:"); self.setWindowTitle(constants.APP_NAME)
 
     def _scan_message_for_code_blocks(self, message: ChatMessage):
         if message.metadata and message.metadata.get("code_block_processed_by_mc"):
@@ -729,6 +770,15 @@ class MainWindow(QWidget):
         if not self.dialog_service: return
         code_viewer_instance = self.dialog_service.show_code_viewer(ensure_creation=ensure_creation)
         if code_viewer_instance and ensure_creation and self.chat_manager:
+            # --- NEW: Connect apply_change_requested from CodeViewer ---
+            if hasattr(code_viewer_instance, 'apply_change_requested'):
+                try:
+                    code_viewer_instance.apply_change_requested.disconnect(self._handle_code_viewer_apply_request)
+                except TypeError:
+                    pass
+                code_viewer_instance.apply_change_requested.connect(self._handle_code_viewer_apply_request)
+            # --- END NEW ---
+
             pcm = self.chat_manager.get_project_context_manager()
             if pcm:
                 active_pid = pcm.get_active_project_id() or constants.GLOBAL_COLLECTION_ID
@@ -741,8 +791,7 @@ class MainWindow(QWidget):
         if self.dialog_service:
             terminal_window = self.dialog_service.show_llm_terminal_window(ensure_creation=True)
             if terminal_window and self._llm_comm_logger_instance:
-                if not hasattr(terminal_window,
-                               '_is_logger_connected') or not terminal_window._is_logger_connected:
+                if not hasattr(terminal_window, '_is_logger_connected') or not terminal_window._is_logger_connected:
                     try:
                         self._llm_comm_logger_instance.new_terminal_log_entry.connect(terminal_window.add_log_entry)
                         terminal_window._is_logger_connected = True
@@ -782,7 +831,8 @@ class MainWindow(QWidget):
 
     @pyqtSlot(dict, str)
     def _handle_request_project_file_save(self, generated_files_data: Dict[str, str], original_query_summary: str):
-        logger.info(f"MainWindow: Received request to save {len(generated_files_data)} files for project '{original_query_summary}'.")
+        logger.info(
+            f"MainWindow: Received request to save {len(generated_files_data)} files for project '{original_query_summary}'.")
         if not self.dialog_service:
             logger.error("DialogService not available to handle file saving.")
             QMessageBox.critical(self, "Error", "Cannot save files: Dialog service unavailable.")
@@ -818,6 +868,7 @@ class MainWindow(QWidget):
             try:
                 normalized_relative_path = os.path.normpath(relative_filepath)
                 full_path = os.path.join(base_directory, normalized_relative_path)
+
                 file_dir = os.path.dirname(full_path)
                 if file_dir:
                     os.makedirs(file_dir, exist_ok=True)
@@ -842,17 +893,68 @@ class MainWindow(QWidget):
                                     f"{files_saved_count} file(s) for project '{original_query_summary}' saved successfully to:\n{base_directory}")
             self.update_status(f"Project '{original_query_summary}' saved!", "#98c379", True, 4000)
         else:
-             QMessageBox.information(self, "No Files Saved", "No files were ultimately saved.")
-             self.update_status("No files were saved from the generation process.", "#e5c07b", True, 3000)
+            QMessageBox.information(self, "No Files Saved", "No files were ultimately saved.")
+            self.update_status("No files were saved from the generation process.", "#e5c07b", True, 3000)
 
         if successfully_saved_paths and self.chat_manager:
             current_project_id = self.chat_manager.get_current_project_id()
             if current_project_id and current_project_id != constants.GLOBAL_COLLECTION_ID:
-                logger.info(f"Requesting RAG re-sync for {len(successfully_saved_paths)} files in project '{current_project_id}'.")
+                logger.info(
+                    f"Requesting RAG re-sync for {len(successfully_saved_paths)} files in project '{current_project_id}'.")
                 if hasattr(self.chat_manager, 'resync_project_files_in_rag'):
                     self.chat_manager.resync_project_files_in_rag(successfully_saved_paths)
                 else:
                     logger.error("ChatManager does not have 'resync_project_files_in_rag' method.")
-                    self.update_status("Files saved, but RAG sync method missing in ChatManager.", "#e06c75", True, 5000)
+                    self.update_status("Files saved, but RAG sync method missing in ChatManager.", "#e06c75", True,
+                                       5000)
             else:
                 logger.info("Project is Global or no active project; RAG resync for saved files skipped by MainWindow.")
+
+    # --- NEW SLOTS to handle signals from CodeViewerWindow and ChangeApplierService ---
+    @pyqtSlot(str, str, str, str)
+    def _handle_code_viewer_apply_request(self,
+                                          project_id: str,
+                                          relative_filepath: str,
+                                          new_content: str,
+                                          focus_prefix: str):
+        logger.info(
+            f"MW: Received apply_change_requested from CodeViewer for '{relative_filepath}' in project '{project_id}'.")
+        if not self.chat_manager: return
+
+        cas = self.chat_manager.get_change_applier_service()
+        if not cas:
+            logger.error("MW: ChangeApplierService not available to handle apply request.")
+            self.update_status(f"Error: Cannot apply change for '{relative_filepath}', service missing.", "#e06c75",
+                               True, 5000)
+            if self.dialog_service and (cv := self.dialog_service.show_code_viewer(ensure_creation=False)):
+                if hasattr(cv, 'handle_apply_completed'):
+                    cv.handle_apply_completed(relative_filepath)
+            return
+
+        cas.apply_file_change(project_id, relative_filepath, new_content, focus_prefix)
+
+    @pyqtSlot(str, str)
+    def _handle_cas_file_applied_successfully(self, project_id: str, absolute_file_path: str):
+        filename = os.path.basename(absolute_file_path)
+        logger.info(
+            f"MW: ChangeApplierService reported file '{filename}' applied successfully for project '{project_id}'.")
+        self.update_status(f"Applied changes to '{filename}'.", "#98c379", True, 4000)
+        if self.dialog_service and (cv := self.dialog_service.show_code_viewer(ensure_creation=False)):
+            if hasattr(cv, 'handle_apply_completed'): cv.handle_apply_completed(filename)
+
+    @pyqtSlot(str, str, str)
+    def _handle_cas_file_application_failed(self, project_id: str, relative_file_path: str, error_message: str):
+        logger.error(
+            f"MW: ChangeApplierService reported failure applying '{relative_file_path}' for project '{project_id}': {error_message}")
+        self.update_status(f"Failed to apply '{os.path.basename(relative_file_path)}': {error_message}", "#e06c75",
+                           True, 7000)
+        if self.dialog_service and (cv := self.dialog_service.show_code_viewer(ensure_creation=False)):
+            if hasattr(cv, 'handle_apply_completed'): cv.handle_apply_completed(relative_file_path)
+
+    @pyqtSlot(str, str)
+    def _handle_cas_rag_sync_initiated(self, project_id: str, absolute_file_path: str):
+        filename = os.path.basename(absolute_file_path)
+        logger.info(f"MW: ChangeApplierService reported RAG sync initiated for '{filename}' in project '{project_id}'.")
+        self.update_status(f"Updating RAG for '{filename}'...", "#61afef", True, 4000)
+
+    # --- END NEW SLOTS ---

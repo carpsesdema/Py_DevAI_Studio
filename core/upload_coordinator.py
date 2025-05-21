@@ -28,19 +28,16 @@ except ImportError as e:
 logger = logging.getLogger(__name__)
 
 
-# The AUTO_SUMMARY_TRIGGER_THRESHOLD_FILES constant logic has been removed.
-# If this was its only use, the constant can be removed from utils/constants.py.
-
 class UploadCoordinator(QObject):
     upload_started = pyqtSignal(bool, str)
-    upload_summary_received = pyqtSignal(ChatMessage)  # This is the RAG processing summary
+    upload_summary_received = pyqtSignal(ChatMessage)
     upload_error = pyqtSignal(str)
     busy_state_changed = pyqtSignal(bool)
 
     def __init__(self,
                  upload_service: UploadService,
                  project_context_manager: ProjectContextManager,
-                 project_summary_coordinator: Optional['ProjectSummaryCoordinator'],  # Remains for manual summary
+                 project_summary_coordinator: Optional['ProjectSummaryCoordinator'],
                  parent: Optional[QObject] = None):
         super().__init__(parent)
         if not upload_service:
@@ -50,7 +47,7 @@ class UploadCoordinator(QObject):
 
         self._upload_service = upload_service
         self._project_context_manager = project_context_manager
-        self._project_summary_coordinator = project_summary_coordinator  # Keep for manual summary
+        self._project_summary_coordinator = project_summary_coordinator
         self._current_upload_task: Optional[asyncio.Task] = None
         self._is_busy: bool = False
 
@@ -71,35 +68,29 @@ class UploadCoordinator(QObject):
             self,
             upload_func: Callable[[], Optional[ChatMessage]],
             operation_description: str,
-            target_collection_id: Optional[str] = None,  # Still useful for logging/context
-            num_items_for_upload: int = 0  # Still useful for logging/context
+            target_collection_id: Optional[str] = None,
+            num_items_for_upload: int = 0
     ):
         logger.info(f"UploadCoordinator: Starting async task for: {operation_description}")
         summary_message: Optional[ChatMessage] = None
-        # The logic for rag_processing_successful_for_some_items and files_added_count
-        # specifically for triggering automatic summaries has been removed.
-
         try:
-            # This summary_message is the RAG processing summary from UploadService
             summary_message = await asyncio.to_thread(upload_func)
-
-            # <<< THE ENTIRE AUTOMATIC PROJECT SUMMARY TRIGGER BLOCK HAS BEEN DELETED >>>
-            # No conditions checked here to call self._project_summary_coordinator.generate_project_summary
-
         except asyncio.CancelledError:
             logger.info(f"Upload task '{operation_description}' cancelled by request.")
             summary_message = ChatMessage(role=SYSTEM_ROLE, parts=["[Upload cancelled by user.]"],
-                                          metadata={"is_cancellation_summary": True})
+                                          metadata={"is_cancellation_summary": True,
+                                                    "collection_id": target_collection_id or "unknown"})
         except Exception as e:
             logger.exception(f"Error during upload task '{operation_description}': {e}")
             self.upload_error.emit(f"Failed during {operation_description}: {e}")
             summary_message = ChatMessage(role=ERROR_ROLE, parts=[f"Upload Error for {operation_description}: {e}"],
-                                          metadata={"is_error_summary": True})
+                                          metadata={"is_error_summary": True,
+                                                    "collection_id": target_collection_id or "unknown"})
         finally:
             if self._current_upload_task is asyncio.current_task():
                 self._current_upload_task = None
             self._set_busy(False)
-            if summary_message:  # This is the RAG processing summary from UploadService
+            if summary_message:
                 self.upload_summary_received.emit(summary_message)
             logger.info(f"UploadCoordinator: Async task for '{operation_description}' finished.")
 
@@ -108,8 +99,8 @@ class UploadCoordinator(QObject):
                          description: str,
                          is_global: bool,
                          item_info: str,
-                         target_collection_id_for_summary: Optional[str] = None,  # Keep for context
-                         num_items_for_upload: int = 0  # Keep for context
+                         target_collection_id_for_summary: Optional[str] = None,
+                         num_items_for_upload: int = 0
                          ):
         if self._is_busy:
             logger.warning("UploadCoordinator is already busy. Ignoring new upload request.")
@@ -158,7 +149,7 @@ class UploadCoordinator(QObject):
             is_global=(active_project_id == constants.GLOBAL_COLLECTION_ID),
             item_info=f"directory '{dir_name}'",
             target_collection_id_for_summary=active_project_id,
-            num_items_for_upload=1
+            num_items_for_upload=1  # Represents one directory operation
         )
 
     def upload_files_to_global(self, file_paths: List[str]):
@@ -192,6 +183,74 @@ class UploadCoordinator(QObject):
             num_items_for_upload=1
         )
 
+    # --- NEW METHOD for RAG Resynchronization ---
+    def resync_file_in_rag(self, project_id: str, file_path: str):
+        """
+        Re-synchronizes a single file in the RAG by removing its old chunks
+        and re-processing the new content. This is non-blocking and uses the
+        same async upload mechanism.
+
+        Args:
+            project_id: The ID of the project/collection.
+            file_path: The absolute path to the file to be re-synced.
+        """
+        if self._is_busy:
+            logger.warning(
+                f"UploadCoordinator busy. RAG resync for '{os.path.basename(file_path)}' in project '{project_id}' queued/ignored.")
+            # Optionally, queue this or emit an error/status update.
+            # For now, just log and return if busy to prevent concurrent _internal_process_upload issues.
+            self.upload_error.emit(f"Cannot resync '{os.path.basename(file_path)}' now, processor is busy.")
+            return
+
+        if not project_id or not file_path:
+            logger.error("Cannot resync RAG: Invalid project_id or file_path.")
+            self.upload_error.emit("Invalid parameters for RAG resync.")
+            return
+
+        if not os.path.exists(file_path):
+            logger.error(f"Cannot resync RAG: File '{file_path}' does not exist.")
+            self.upload_error.emit(f"File for RAG resync not found: {os.path.basename(file_path)}")
+            return
+
+        logger.info(f"UploadCoordinator: Initiating RAG resync for file '{file_path}' in project '{project_id}'.")
+
+        # Define the callable for the internal upload process
+        def _resync_operation():
+            logger.info(f"[Resync Task] Removing old chunks for '{file_path}' from '{project_id}'.")
+            # Access VectorDBService via UploadService (assuming UploadService has a getter or direct access)
+            vdb_service = getattr(self._upload_service, '_vector_db_service', None)
+            if not vdb_service:
+                logger.error(
+                    "[Resync Task] VectorDBService not accessible via UploadService. Cannot remove old chunks.")
+                return ChatMessage(role=ERROR_ROLE, parts=[
+                    f"[Error: RAG resync for {os.path.basename(file_path)} failed (DB service missing)."],
+                                   metadata={"collection_id": project_id})
+
+            remove_success = vdb_service.remove_document_chunks_by_source(project_id, file_path)
+            if not remove_success:
+                logger.warning(
+                    f"[Resync Task] Failed to remove all old chunks for '{file_path}' from '{project_id}'. Re-adding may result in duplicates or stale data.")
+                # Continue to re-add, but log the warning.
+
+            logger.info(f"[Resync Task] Re-processing and adding new content for '{file_path}' to '{project_id}'.")
+            # process_files_for_context will return a ChatMessage summary
+            return self._upload_service.process_files_for_context([file_path], collection_id=project_id)
+
+        # Use the existing _initiate_upload mechanism
+        description = f"resyncing file '{os.path.basename(file_path)}' in RAG for project '{project_id}'"
+        self._initiate_upload(
+            upload_callable=_resync_operation,
+            description=description,
+            is_global=(project_id == constants.GLOBAL_COLLECTION_ID),
+            item_info=f"file '{os.path.basename(file_path)}' (resync)",
+            target_collection_id_for_summary=project_id,
+            num_items_for_upload=1  # Single file operation
+        )
+        # The upload_summary_received signal will be emitted by _internal_process_upload
+        # once _resync_operation (which calls process_files_for_context) completes.
+
+    # --- END NEW METHOD ---
+
     def cancel_current_upload(self):
         if self._current_upload_task and not self._current_upload_task.done():
             logger.info("UploadCoordinator: Cancelling ongoing upload task...")
@@ -199,7 +258,7 @@ class UploadCoordinator(QObject):
             logger.debug("Cancellation requested for upload task.")
         else:
             logger.debug("UploadCoordinator: No active upload task to cancel.")
-            if self._is_busy: self._set_busy(False)
+            if self._is_busy: self._set_busy(False)  # Ensure busy state is reset if task was already done
 
     def is_busy(self) -> bool:
         return self._is_busy

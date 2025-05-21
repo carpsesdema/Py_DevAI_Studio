@@ -58,6 +58,17 @@ except ImportError as e:
     PROJECT_SUMMARY_COORDINATOR_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import ProjectSummaryCoordinator: {e}.")
 
+# --- NEW: Import ChangeApplierService ---
+try:
+    from core.change_applier_service import ChangeApplierService
+
+    CHANGE_APPLIER_SERVICE_AVAILABLE = True
+except ImportError as e:
+    ChangeApplierService = None  # type: ignore
+    CHANGE_APPLIER_SERVICE_AVAILABLE = False
+    logging.error(f"ApplicationOrchestrator: Failed to import ChangeApplierService: {e}.")
+# --- END NEW ---
+
 from services.session_service import SessionService
 from services.upload_service import UploadService
 from services.vector_db_service import VectorDBService
@@ -104,7 +115,6 @@ class ApplicationOrchestrator:
 
         self.backend_coordinator = BackendCoordinator(self._all_backend_adapters_dict)
 
-        # --- INSTANTIATE LlmCommunicationLogger ---
         self.llm_communication_logger: Optional[LlmCommunicationLogger] = None
         if LLM_COMM_LOGGER_AVAILABLE and LlmCommunicationLogger is not None:
             try:
@@ -115,7 +125,6 @@ class ApplicationOrchestrator:
                              exc_info=True)
         else:
             logger.warning("ApplicationOrchestrator: LlmCommunicationLogger not available or not imported.")
-        # --- END INSTANTIATION ---
 
         self.rag_handler: Optional[RagHandler] = None
         if self._upload_service and self._vector_db_service:
@@ -157,7 +166,7 @@ class ApplicationOrchestrator:
                     backend_coordinator=self.backend_coordinator,
                     project_context_manager=self.project_context_manager,
                     rag_handler=self.rag_handler,
-                    llm_comm_logger=self.llm_communication_logger  # <-- PASS THE LOGGER HERE
+                    llm_comm_logger=self.llm_communication_logger
                 )
             except Exception as e:
                 logger.error(f"ApplicationOrchestrator: Failed to instantiate ModificationCoordinator: {e}",
@@ -205,19 +214,46 @@ class ApplicationOrchestrator:
             logger.warning(
                 "ApplicationOrchestrator: ProjectSummaryCoordinator cannot be instantiated (dependencies or import failed).")
 
+        # Instantiate UploadCoordinator (needs project_summary_coordinator)
         self.upload_coordinator: Optional[UploadCoordinator] = None
         if self._upload_service and self.project_context_manager:
             try:
                 self.upload_coordinator = UploadCoordinator(
                     upload_service=self._upload_service,
                     project_context_manager=self.project_context_manager,
-                    project_summary_coordinator=self.project_summary_coordinator
+                    project_summary_coordinator=self.project_summary_coordinator # Pass the coordinator
                 )
             except Exception as e:
                 logger.error(f"ApplicationOrchestrator: Failed to instantiate UploadCoordinator: {e}", exc_info=True)
         else:
-            logger.error(
-                "ApplicationOrchestrator: Cannot initialize UploadCoordinator (UploadService or ProjectContextManager missing).")
+            logger.error("ApplicationOrchestrator: Cannot initialize UploadCoordinator (UploadService or ProjectContextManager missing).")
+
+        # Instantiate ChangeApplierService (needs upload_coordinator and file_handler_service from upload_service)
+        self.change_applier_service: Optional[ChangeApplierService] = None
+        if CHANGE_APPLIER_SERVICE_AVAILABLE and ChangeApplierService is not None and \
+                hasattr(self._upload_service, '_file_handler_service') and self.upload_coordinator:
+            try:
+                file_handler_service_instance = getattr(self._upload_service, '_file_handler_service', None)
+                if file_handler_service_instance and self.upload_coordinator:
+                    self.change_applier_service = ChangeApplierService(
+                        file_handler_service=file_handler_service_instance,  # type: ignore
+                        upload_coordinator=self.upload_coordinator
+                    )
+                    logger.info("ApplicationOrchestrator: ChangeApplierService instantiated.")
+                else:
+                    logger.warning(
+                        "ApplicationOrchestrator: ChangeApplierService NOT instantiated due to missing FileHandlerService or UploadCoordinator instance.")
+            except Exception as e:
+                logging.error(f"ApplicationOrchestrator: Failed to instantiate ChangeApplierService: {e}",
+                              exc_info=True)
+        else:
+            missing_deps_cas = []
+            if not CHANGE_APPLIER_SERVICE_AVAILABLE: missing_deps_cas.append("Import")
+            if not hasattr(self._upload_service, '_file_handler_service'): missing_deps_cas.append("FileHandler (via UploadService)")
+            if not self.upload_coordinator: missing_deps_cas.append("UploadCoordinator instance")
+            logger.warning(
+                f"ApplicationOrchestrator: ChangeApplierService not instantiated. Missing: {', '.join(missing_deps_cas)}")
+
 
         self.user_input_handler: Optional[UserInputHandler] = None
         if self.user_input_processor_instance and self.project_context_manager:
@@ -278,7 +314,8 @@ class ApplicationOrchestrator:
     def get_project_intelligence_service(self) -> Optional[ProjectIntelligenceService]:
         return self.project_intelligence_service
 
-    # --- ADD GETTER FOR THE LOGGER ---
+    def get_change_applier_service(self) -> Optional[ChangeApplierService]:
+        return self.change_applier_service
+
     def get_llm_communication_logger(self) -> Optional[LlmCommunicationLogger]:
         return self.llm_communication_logger
-    # --- END GETTER ---
