@@ -4,14 +4,11 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 
-from utils import constants # For APP_NAME logger
-
-logger = logging.getLogger(constants.APP_NAME)
+logger = logging.getLogger(__name__)
 
 class CodeAnalysisService:
     """
-    Provides services for analyzing source code structure,
-    focusing on AST parsing for Python files.
+    Provides services for analyzing source code structure, initially focusing on AST parsing.
     """
 
     def __init__(self):
@@ -24,60 +21,43 @@ class CodeAnalysisService:
 
         Args:
             code_content: The Python code as a string.
-            file_path: The path to the file (used for logging and error messages).
+            file_path: The path to the file (used for logging).
 
         Returns:
             A list of dictionaries, each representing a function or class structure
-            with its name, type ('function' or 'class'), start line, and end line.
-            Returns an empty list if parsing fails or no structures are found.
+            with its name, type, start line, and end line. Returns empty list on error.
             Example: [{"name": "my_func", "type": "function", "start_line": 10, "end_line": 25}, ...]
         """
-        structures: List[Dict[str, Any]] = []
+        structures = []
         if not code_content:
-            logger.debug(f"No content to parse for AST in file: {os.path.basename(file_path)}")
             return structures
 
         try:
             logger.debug(f"Attempting AST parse for: {os.path.basename(file_path)}")
-            # ast.parse can take 'filename' argument for better error messages
-            tree = ast.parse(code_content, filename=os.path.basename(file_path))
+            # Ensure Python 3.8+ for end_lineno. Add type_comments=False if needed for compatibility.
+            tree = ast.parse(code_content, filename=file_path)
             logger.debug(f"AST parsing successful for: {os.path.basename(file_path)}")
 
             class StructureVisitor(ast.NodeVisitor):
                 def __init__(self, file_path_for_log: str):
-                    self.structures_found: List[Dict[str, Any]] = []
-                    self.file_path_for_log = file_path_for_log # Store for logging within visitor
+                    self.structures = []
+                    self.file_path_for_log = file_path_for_log
                     super().__init__()
 
                 def _get_end_line(self, node: ast.AST) -> Optional[int]:
-                    """
-                    Safely get the end line number.
-                    Requires Python 3.8+ for reliable 'end_lineno'.
-                    """
-                    if hasattr(node, 'end_lineno') and node.end_lineno is not None:
+                    """Safely get the end line number (requires Python 3.8+)."""
+                    if hasattr(node, 'end_lineno'):
                         return node.end_lineno
                     else:
-                        # Fallback for older Python or nodes where end_lineno might be None.
-                        # This is a simple heuristic: iterate over direct children to find max lineno.
-                        # A more robust approach might be needed for complex cases or very old Python.
-                        max_child_line = node.lineno
-                        for child_node in ast.iter_child_nodes(node):
-                            if hasattr(child_node, 'lineno'):
-                                max_child_line = max(max_child_line, child_node.lineno)
-                            # If child_node also has end_lineno, could recurse, but keep simple.
-                        # If no children with line numbers, assume it ends on the start line.
-                        logger.debug(
-                            f"Node '{getattr(node, 'name', 'Unnamed')}' in "
-                            f"{os.path.basename(self.file_path_for_log)} lacks 'end_lineno' or it's None. "
-                            f"Using lineno {node.lineno} or max child line {max_child_line} as estimate."
-                        )
-                        return max_child_line if max_child_line > node.lineno else node.lineno
-
+                        # Basic fallback if end_lineno not available
+                        logger.debug(f"Node '{getattr(node, 'name', 'Unnamed')}' in {os.path.basename(self.file_path_for_log)} lacks 'end_lineno'. Estimating.")
+                        # A more complex estimation could walk child nodes max line, but keep simple for now.
+                        return node.lineno # Simplest fallback: ends on start line
 
                 def visit_FunctionDef(self, node: ast.FunctionDef):
                     end_line = self._get_end_line(node)
                     if end_line is not None:
-                        self.structures_found.append({
+                        self.structures.append({
                             "name": node.name,
                             "type": "function",
                             "start_line": node.lineno,
@@ -88,22 +68,23 @@ class CodeAnalysisService:
                     self.generic_visit(node) # Continue visiting children
 
                 def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+                    # Treat async functions the same as regular functions
                     end_line = self._get_end_line(node)
                     if end_line is not None:
-                        self.structures_found.append({
+                        self.structures.append({
                             "name": node.name,
-                            "type": "function", # Treat async functions as 'function' type
+                            "type": "function", # Keep type consistent as 'function'
                             "start_line": node.lineno,
                             "end_line": end_line
                         })
                     else:
                          logger.warning(f"Could not determine end line for async function '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
-                    self.generic_visit(node)
+                    self.generic_visit(node) # Continue visiting children
 
                 def visit_ClassDef(self, node: ast.ClassDef):
                     end_line = self._get_end_line(node)
                     if end_line is not None:
-                        self.structures_found.append({
+                        self.structures.append({
                             "name": node.name,
                             "type": "class",
                             "start_line": node.lineno,
@@ -111,39 +92,24 @@ class CodeAnalysisService:
                         })
                     else:
                          logger.warning(f"Could not determine end line for class '{node.name}' in {os.path.basename(self.file_path_for_log)}.")
-                    self.generic_visit(node)
+                    self.generic_visit(node) # Continue visiting children
 
+            # Instantiate and run the visitor
             visitor = StructureVisitor(file_path)
             visitor.visit(tree)
-            structures = visitor.structures_found
-            if structures:
-                logger.info(f"Extracted {len(structures)} function/class structures from: {os.path.basename(file_path)}")
-            else:
-                logger.debug(f"No top-level function/class structures found by AST visitor in: {os.path.basename(file_path)}")
+            structures = visitor.structures
+            logger.info(f"Extracted {len(structures)} functions/classes from: {os.path.basename(file_path)}")
 
         except SyntaxError as e:
-            logger.warning(f"AST SyntaxError parsing {os.path.basename(file_path)} (line {e.lineno}, offset {e.offset}): {e.msg}. Skipping structure extraction for this file.")
+            logger.warning(f"AST SyntaxError parsing {os.path.basename(file_path)}: {e}. Skipping structure extraction for this file.")
             # Return empty list, don't stop processing other files
         except Exception as e:
-            # Catch other potential AST errors (e.g., recursion depth on complex files)
+            # Catch other potential AST errors (e.g., recursion depth)
             logger.error(f"Unexpected AST error parsing {os.path.basename(file_path)}: {e}", exc_info=True)
             # Return empty list
 
         return structures
 
-    # --- Potential future methods for deeper code analysis ---
-    # def analyze_dependencies(self, code_content: str, file_path: str) -> List[str]:
-    #     """Extracts import statements."""
-    #     imports = []
-    #     try:
-    #         tree = ast.parse(code_content, filename=os.path.basename(file_path))
-    #         for node in ast.walk(tree):
-    #             if isinstance(node, ast.Import):
-    #                 for alias in node.names:
-    #                     imports.append(alias.name)
-    #             elif isinstance(node, ast.ImportFrom):
-    #                 if node.module: # node.module can be None for 'from . import ...'
-    #                     imports.append(node.module)
-    #     except Exception as e:
-    #         logger.warning(f"Could not analyze dependencies for {os.path.basename(file_path)}: {e}")
-    #     return list(set(imports)) # Unique imports
+    # --- Future methods for code analysis could go here ---
+    # def analyze_dependencies(self, code_content: str) -> List[str]:
+    #     pass

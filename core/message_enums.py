@@ -1,15 +1,13 @@
-from enum import Enum
+# core/message_enums.py
+from enum import Enum, auto
 
 class MessageLoadingState(Enum):
-    IDLE = 0      # Message is static, not expecting updates (e.g., user message, fully loaded AI message)
-    LOADING = 1   # AI is actively generating/streaming this message
-    COMPLETED = 2 # AI has finished generating/streaming this message successfully
-    ERROR = 3     # An error occurred while generating/fetching this message
-
-    @property
-    def display_name(self) -> str:
-        # Provides a human-readable version if needed, though not strictly necessary for enum usage
-        return self.name.replace("_", " ").title()
-
-    def __str__(self) -> str:
-        return self.name
+    """
+    Represents the loading state of an AI-generated message.
+    """
+    IDLE = auto()      # Default state, or message is fully processed and no specific indicator needed.
+                       # For AI messages, this means the message is finalized and not actively being generated.
+    LOADING = auto()   # AI is actively generating this message or about to start.
+    COMPLETED = auto() # AI finished generating this message successfully. The static "done" icon will be shown.
+    ERROR = auto()     # An error occurred while generating this message (optional, for specific error indication).
+                       # Could show a different static icon if desired.

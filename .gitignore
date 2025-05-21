@@ -1,9 +1,8 @@
-# PyDevAI_Studio/.gitignore
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
 
 # C extensions
 *.so
@@ -30,9 +29,9 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-# Usually these files are written by a PyInstaller build:
+# Usually these files are written by a CI, but they should be ignored if enabled:
+*.manifest
 *.spec
-*.pyzw
 
 # Installer logs
 pip-log.txt
@@ -48,12 +47,25 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
-*.log
+*.py,cover
+.hypothesis/
 .pytest_cache/
 
-# Translations
-*.mo
-*.pot
+# Environments
+.env                # Ignore environment variables file
+.venv               # Ignore the virtual environment directory seen in your project
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
 
 # Django stuff:
 *.log
@@ -84,75 +96,31 @@ ipython_config.py
 # pyenv
 .python-version
 
-# PEP 582; __pypackages__ directory
+# PEP 582; __pypackages__
 __pypackages__/
 
 # Celery stuff
 celerybeat-schedule
 celerybeat.pid
 
-# SageMath files
-.sage/
+# SageMath parsed files
+*.sage.py
 
-# Virtual environments
-.env
-.venv/
-venv/
-ENV/
-env/
-env.bak/
-venv.bak/
+# Environments tools
+.envrc
+envdir
 
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# IDE configuration files
-.idea/
-.vscode/
-*.sublime-project
-*.sublime-workspace
-
-# OS-generated files
+# macOS specific files
 .DS_Store
+
+# Windows specific files
 Thumbs.db
 
-# Local logs directory (if created within the project repo)
-# logs/ # Your constants.py places logs in USER_DATA_BASE_DIR, so this might not be needed here
-# if logs/ is truly outside your repo.
+# IDE files (PyCharm/JetBrains)
+.idea/
 
-# Local RAG collections (if created within the project repo)
-# rag_collections/ # Your constants.py places these in USER_DATA_BASE_DIR
-
-# User-specific settings file (if created within the project repo)
-# settings.json # Your constants.py places this in USER_DATA_BASE_DIR
-
-# Specific to PyDevAI Studio if these temporary files are in the repo
-*.tmp
-*.bak
-*.swp
-
-# Sensitive files
-*.env
-.env.*
-!example.env # If you have an example.env file that IS version controlled
+# Other potential sensitive files (add specific names if you have them)
+# config.yaml
+# secrets.json!/.env
+!/.env
+!/.env

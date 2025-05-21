@@ -1,83 +1,59 @@
 # services/chunking_service.py
-import logging
-import os
-import bisect # For efficient line number lookup
-from typing import List, Dict, Any, Optional, Union
+# UPDATED FILE - Added start_line and end_line calculation to chunk metadata
 
-from utils import constants
-from core.app_settings import AppSettings
+import os
+import logging
+import bisect # Using bisect for efficient line number lookup
+from typing import List, Dict, Any
 
 # --- LangChain imports ---
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter, PythonCodeTextSplitter
-    LANGCHAIN_SPLITTERS_AVAILABLE = True
-except ImportError:
-    RecursiveCharacterTextSplitter = None # type: ignore
-    PythonCodeTextSplitter = None # type: ignore
-    LANGCHAIN_SPLITTERS_AVAILABLE = False
-    logging.critical("ChunkingService: langchain-text-splitters not found. Chunking will be basic or fail. Install with: pip install langchain-text-splitters")
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language, PythonCodeTextSplitter
 
-# --- CodeAnalysisService Import ---
-try:
-    from .code_analysis_service import CodeAnalysisService
-    CODE_ANALYSIS_SERVICE_AVAILABLE = True
-except ImportError:
-    CodeAnalysisService = None # type: ignore
-    CODE_ANALYSIS_SERVICE_AVAILABLE = False
-    logging.error("ChunkingService: CodeAnalysisService not found. Python code entity extraction will be disabled.")
+# --- Local Imports ---
+from utils import constants
 
-
-logger = logging.getLogger(constants.APP_NAME)
+logger = logging.getLogger(__name__)
 
 class ChunkingService:
     """
     Handles chunking of documents using LangChain splitters.
-    Integrates CodeAnalysisService to associate code entities (functions, classes)
-    with chunks for Python files.
+    Adds start_line and end_line numbers to chunk metadata.
     """
 
-    def __init__(self, settings: AppSettings):
-        self.settings = settings
-        self.chunk_size = self.settings.get("rag_chunk_size", constants.DEFAULT_RAG_CHUNK_SIZE)
-        self.chunk_overlap = self.settings.get("rag_chunk_overlap", constants.DEFAULT_RAG_CHUNK_OVERLAP)
+    def __init__(self, chunk_size: int, chunk_overlap: int):
+        logger.info(f"ChunkingService initialized with chunk_size={chunk_size}, chunk_overlap={chunk_overlap}")
+        if not isinstance(chunk_size, int) or chunk_size <= 0:
+            fallback_size = 1000
+            logger.warning(f"Invalid chunk_size ({chunk_size}), using fallback: {fallback_size}")
+            chunk_size = fallback_size
+        if not isinstance(chunk_overlap, int) or chunk_overlap < 0 or chunk_overlap >= chunk_size:
+             fallback_overlap = int(chunk_size * 0.15) # 15% overlap as fallback
+             logger.warning(f"Invalid chunk_overlap ({chunk_overlap}) for chunk_size {chunk_size}, using fallback: {fallback_overlap}")
+             chunk_overlap = fallback_overlap
 
-        self.recursive_splitter: Optional[RecursiveCharacterTextSplitter] = None
-        self.python_splitter: Optional[PythonCodeTextSplitter] = None
-        self.code_analysis_service: Optional[CodeAnalysisService] = None
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
 
-        if not LANGCHAIN_SPLITTERS_AVAILABLE:
-            logger.error("Langchain text splitters are not available. ChunkingService will not function correctly.")
-            # Service is essentially non-functional without splitters
-            return
+        # --- Instantiate the LangChain splitters ---
+        # 1. Default/Fallback Recursive Splitter
+        self.recursive_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+            length_function=len,
+        )
+        logger.info(f"Using LangChain RecursiveCharacterTextSplitter (size={self.chunk_size}, overlap={self.chunk_overlap}) as default.")
 
+        # 2. Python Code Splitter
         try:
-            self.recursive_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=self.chunk_size,
-                chunk_overlap=self.chunk_overlap,
-                length_function=len,
-                is_separator_regex=False, # Common setting
-            )
             self.python_splitter = PythonCodeTextSplitter(
                 chunk_size=self.chunk_size,
                 chunk_overlap=self.chunk_overlap
+                # PythonCodeTextSplitter automatically uses appropriate Python separators
             )
-            logger.info(
-                f"ChunkingService initialized with chunk_size={self.chunk_size}, overlap={self.chunk_overlap} using Langchain splitters.")
+            logger.info(f"Initialized LangChain PythonCodeTextSplitter (size={self.chunk_size}, overlap={self.chunk_overlap}).")
         except Exception as e:
-            logger.exception(f"Failed to initialize Langchain splitters: {e}")
-            self.recursive_splitter = None
-            self.python_splitter = None
-            # Fallback to recursive if python splitter fails, but main check is LANGCHAIN_SPLITTERS_AVAILABLE
-
-        if CODE_ANALYSIS_SERVICE_AVAILABLE and CodeAnalysisService is not None:
-            try:
-                self.code_analysis_service = CodeAnalysisService()
-                logger.info("ChunkingService: CodeAnalysisService instantiated successfully.")
-            except Exception as e:
-                logger.error(f"ChunkingService: Failed to instantiate CodeAnalysisService: {e}")
-                self.code_analysis_service = None
-        else:
-            logger.warning("ChunkingService: CodeAnalysisService is not available. Python entity association will be skipped.")
+            logger.error(f"Failed to initialize PythonCodeTextSplitter: {e}. Falling back to recursive for Python.", exc_info=True)
+            self.python_splitter = None # Mark as unavailable if init fails
 
 
     def _get_line_start_indices(self, text: str) -> List[int]:
@@ -94,12 +70,15 @@ class ChunkingService:
 
     def _get_line_number(self, char_index: int, line_start_indices: List[int]) -> int:
         """Finds the 1-based line number for a given character index."""
+        # bisect_right finds the insertion point to maintain sorted order.
+        # The insertion point corresponds to the line number (add 1 for 1-based index).
         line_num_0_based = bisect.bisect_right(line_start_indices, char_index) - 1
         return max(1, line_num_0_based + 1) # Ensure minimum line number is 1
 
     def chunk_document(self, content: str, source_id: str, file_ext: str) -> List[Dict[str, Any]]:
         """
-        Chunks a document and associates code entities for Python files.
+        Chunks a document using the appropriate LangChain splitter based on file extension.
+        Adds start_line and end_line to metadata.
 
         Args:
             content: The text content of the document.
@@ -108,101 +87,97 @@ class ChunkingService:
 
         Returns:
             A list of dictionaries, where each dictionary represents a chunk
-            and contains 'content' and 'metadata' (including code_entities).
+            and contains 'content' and 'metadata' (including start/end line). Returns empty list on error.
         """
         filename_base = os.path.basename(source_id) if source_id else "unknown_source"
-        if not content or not content.strip():
-            logger.warning(f"Skipping chunking for empty content from '{filename_base}'")
+        logger.debug(f"Chunking document: {filename_base} (ext: {file_ext})")
+        if not isinstance(content, str) or not content.strip():
+            logger.warning(f"Skipping chunking for empty content: {filename_base}")
             return []
 
-        if not LANGCHAIN_SPLITTERS_AVAILABLE:
-            logger.error("Cannot chunk document: Langchain splitters are unavailable.")
-            return []
-
-        splitter_to_use: Optional[Union[RecursiveCharacterTextSplitter, PythonCodeTextSplitter]] = None
+        # --- Choose the appropriate splitter ---
+        splitter_to_use = None
         if file_ext == '.py' and self.python_splitter:
+            logger.debug(f"Using PythonCodeTextSplitter for '{filename_base}'")
             splitter_to_use = self.python_splitter
-        elif self.recursive_splitter: # Fallback for non-Python or if python_splitter failed
-            splitter_to_use = self.recursive_splitter
         else:
-            logger.error(f"No suitable text splitter available for '{filename_base}'. Cannot chunk.")
-            return []
+            if file_ext == '.py': # Log fallback specifically for Python if splitter failed init
+                 logger.warning(f"PythonCodeTextSplitter not available, falling back to RecursiveCharacterTextSplitter for '{filename_base}'.")
+            logger.debug(f"Using default RecursiveCharacterTextSplitter for '{filename_base}'")
+            splitter_to_use = self.recursive_splitter
+        # ------------------------------------
 
-        logger.debug(f"Chunking document '{filename_base}' (ext: {file_ext}) using {type(splitter_to_use).__name__}")
-
-        code_structures: List[Dict[str, Any]] = []
-        if file_ext == '.py' and self.code_analysis_service:
-            try:
-                code_structures = self.code_analysis_service.parse_python_structures(content, source_id)
-                logger.info(f"Found {len(code_structures)} code structures in '{filename_base}' for entity association.")
-            except Exception as e_cas:
-                logger.error(f"Error parsing code structures for '{filename_base}' with CodeAnalysisService: {e_cas}")
-        elif file_ext == '.py':
-            logger.warning(f"CodeAnalysisService not available, cannot extract entities for '{filename_base}'.")
-
+        if splitter_to_use is None: # Should not happen if recursive_splitter is always initialized
+             logger.error(f"No valid text splitter available for '{filename_base}'. Cannot chunk.")
+             return []
 
         try:
+            # --- Pre-calculate line start indices ---
             line_start_indices = self._get_line_start_indices(content)
+            logger.debug(f"Calculated {len(line_start_indices)} line start indices for '{filename_base}'.")
+            # ---------------------------------------
+
+            logger.debug(f"Splitting text for '{filename_base}' (length: {len(content)}) using {type(splitter_to_use).__name__}")
             split_texts = splitter_to_use.split_text(content)
-            chunks_result: List[Dict[str, Any]] = []
-            current_original_content_offset = 0
+            logger.debug(f"Split into {len(split_texts)} chunks for '{filename_base}'")
+
+            # --- Format output ---
+            chunks = []
+            current_pos = 0 # Track position in original content for approximate start_index search
 
             for i, text_chunk in enumerate(split_texts):
-                if not text_chunk.strip():
-                    continue
+                if not text_chunk.strip(): # Skip empty chunks if splitter produces them
+                     logger.debug(f"Skipping empty chunk {i} for '{filename_base}'")
+                     continue
 
+                # --- Find approximate character start/end indices ---
                 chunk_start_in_original = -1
+                # Try finding from current_pos first for better accuracy with overlaps
                 try:
-                    chunk_start_in_original = content.find(text_chunk, current_original_content_offset)
-                except Exception: pass # Broad catch for find issues
+                    chunk_start_in_original = content.find(text_chunk, current_pos)
+                except Exception:
+                    pass # Ignore potential errors in find
 
                 if chunk_start_in_original == -1:
-                    try: chunk_start_in_original = content.find(text_chunk)
+                    # Fallback: search from the beginning (less accurate with identical chunks)
+                    try:
+                        chunk_start_in_original = content.find(text_chunk)
                     except Exception:
-                        chunk_start_in_original = current_original_content_offset
-                        logger.warning(
-                            f"Could not reliably find start index for chunk {i} of '{filename_base}'. Using estimated pos: {current_original_content_offset}")
+                        pass
+
+                if chunk_start_in_original == -1:
+                     # If still not found, use the previous position as a rough estimate
+                     chunk_start_in_original = current_pos
+                     logger.warning(f"Could not reliably find start index for chunk {i} of '{filename_base}'. Using estimated position {current_pos}.")
 
                 chunk_end_in_original = chunk_start_in_original + len(text_chunk)
+                # ----------------------------------------------------
+
+                # --- Calculate start_line and end_line ---
                 start_line = self._get_line_number(chunk_start_in_original, line_start_indices)
-                last_char_index_of_chunk = max(0, chunk_end_in_original - 1)
-                end_line = self._get_line_number(last_char_index_of_chunk, line_start_indices)
-
-                # --- Associate Code Entities ---
-                entities_in_chunk: List[str] = []
-                if code_structures: # Only if we have structures (i.e., for Python files and CAS worked)
-                    for struct in code_structures:
-                        struct_start_line = struct.get("start_line")
-                        struct_end_line = struct.get("end_line")
-                        struct_name = struct.get("name")
-
-                        if struct_start_line is not None and struct_end_line is not None and struct_name:
-                            # Check for overlap: if the structure's line range overlaps with the chunk's line range
-                            if max(start_line, struct_start_line) <= min(end_line, struct_end_line):
-                                entities_in_chunk.append(struct_name)
-                # --- End Entity Association ---
+                # For end_line, we need the line number containing the *last character* of the chunk.
+                last_char_index = max(0, chunk_end_in_original - 1)
+                end_line = self._get_line_number(last_char_index, line_start_indices)
+                # ---------------------------------------
 
                 metadata = {
-                    "source": str(source_id), # Full path or identifier
-                    "filename": filename_base, # Just the filename for display
-                    "chunk_index": i,
-                    "start_char_index": chunk_start_in_original,
-                    "chunk_length_chars": len(text_chunk),
-                    "start_line": start_line,
-                    "end_line": end_line,
-                    "content": text_chunk, # Storing original chunk content in metadata for easy retrieval
-                    "code_entities": list(set(entities_in_chunk)) # Store unique entity names
+                    "source": str(source_id),
+                    "filename": filename_base,
+                    "chunk_index": i, # Index of the chunk within this document
+                    "start_index": chunk_start_in_original, # Approximate start char index
+                    "content": text_chunk, # IMPORTANT: Store original chunk content in metadata for DB lookup/display
+                    "start_line": start_line, # <-- ADDED
+                    "end_line": end_line, # <-- ADDED
                 }
-                chunks_result.append({"content": text_chunk, "metadata": metadata})
-                current_original_content_offset = chunk_start_in_original + 1
+                chunks.append({"content": text_chunk, "metadata": metadata})
 
-            logger.info(f"Created {len(chunks_result)} non-empty chunks for '{filename_base}'. Entities associated where applicable.")
-            return chunks_result
+                # Update position for next search (move past the start of this chunk)
+                # Add a small increment to handle potential overlaps correctly
+                current_pos = chunk_start_in_original + 1
+
+            logger.info(f"{type(splitter_to_use).__name__} created {len(chunks)} non-empty chunks for {filename_base} (with line numbers)")
+            return chunks
 
         except Exception as e:
-            logger.exception(f"Error chunking document '{filename_base}' using {type(splitter_to_use).__name__}: {e}")
-            return []
-
-    def is_ready(self) -> bool:
-        """Checks if the service has necessary components initialized."""
-        return LANGCHAIN_SPLITTERS_AVAILABLE and (self.recursive_splitter is not None or self.python_splitter is not None)
+            logger.exception(f"Error using {type(splitter_to_use).__name__} for {filename_base}: {e}")
+            return [] # Return empty list on error

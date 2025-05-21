@@ -1,289 +1,396 @@
+# services/vector_db_service.py
 import logging
 import os
-import shutil
-import pickle
-from typing import List, Dict, Any, Optional, Tuple
-
-from utils import constants
-
+import shutil # For deleting collection directories
+import pickle # For saving/loading metadata (simple persistence)
+# Ensure faiss and numpy are imported
 try:
     import faiss
     import numpy as np
-
-    FAISS_NUMPY_AVAILABLE = True
+    FAISS_AVAILABLE = True
 except ImportError:
-    faiss = None
-    np = None
-    FAISS_NUMPY_AVAILABLE = False
-    logging.critical("VectorDBService: FAISS or NumPy library not found. RAG DB cannot function.")
+    faiss = None # type: ignore
+    np = None # type: ignore
+    FAISS_AVAILABLE = False
+    logging.critical("VectorDBService: FAISS or NumPy library not found. RAG DB cannot function. Install: pip install faiss-cpu numpy")
 
-logger = logging.getLogger(constants.APP_NAME)
+from typing import List, Dict, Any, Optional, Tuple
 
+# --- Local Imports ---
+from utils import constants
+
+# Define GLOBAL_COLLECTION_ID, typically imported from constants
+GLOBAL_COLLECTION_ID = constants.GLOBAL_COLLECTION_ID
+
+logger = logging.getLogger(__name__)
 
 class VectorDBService:
-    _INDEX_FILENAME = "vector_store.faiss"
-    _METADATA_FILENAME = "vector_store.meta.pkl"
+    """
+    Manages interactions with FAISS vector indices, supporting multiple collections.
+    Each collection is stored in a separate directory containing a FAISS index file
+    and a pickled metadata file.
+    Relies on external embedding generation (embeddings passed to add_embeddings).
+    """
 
-    def __init__(self, index_dimension: int, base_persist_directory: str):
-        if not FAISS_NUMPY_AVAILABLE:
-            raise ImportError("FAISS or NumPy is not installed, VectorDBService cannot operate.")
+    def __init__(self, index_dimension: int, base_persist_directory: Optional[str] = None):
+        """
+        Initializes the VectorDBService and loads existing collections.
+        Args:
+            index_dimension (int): The dimension of the embedding vectors.
+            base_persist_directory (Optional[str]): The base directory for storing collection data.
+                                                    Defaults to constants.RAG_COLLECTIONS_PATH.
+        """
+        logger.info("VectorDBService initializing (FAISS implementation)...")
+        # Initialize _service_ready to False initially
+        self._service_ready = False
+        self._collections_data: Dict[str, Tuple[faiss.Index, List[Dict[str, Any]]]] = {}
 
-        if not isinstance(index_dimension, int) or index_dimension <= 0:
-            raise ValueError("Index dimension must be a positive integer.")
-
-        self.index_dimension = index_dimension
-        self.base_persist_directory = base_persist_directory
-        self._collections: Dict[str, Tuple[Optional[faiss.Index], List[Dict[str, Any]]]] = {}
-
-        os.makedirs(self.base_persist_directory, exist_ok=True)
-        self._load_all_collections_from_disk()
-        logger.info(
-            f"VectorDBService initialized. Base directory: {self.base_persist_directory}, Index Dim: {self.index_dimension}")
-
-    def _get_collection_path(self, collection_id: str) -> str:
-        return os.path.join(self.base_persist_directory, collection_id)
-
-    def _load_collection_from_disk(self, collection_id: str) -> bool:
-        if not FAISS_NUMPY_AVAILABLE: return False
-        collection_path = self._get_collection_path(collection_id)
-        index_file = os.path.join(collection_path, self._INDEX_FILENAME)
-        metadata_file = os.path.join(collection_path, self._METADATA_FILENAME)
-
-        if os.path.exists(index_file) and os.path.exists(metadata_file):
-            try:
-                index = faiss.read_index(index_file)
-                if index.d != self.index_dimension:
-                    logger.error(
-                        f"Dimension mismatch for collection '{collection_id}'. Expected {self.index_dimension}, got {index.d}. Cannot load.")
-                    return False
-                with open(metadata_file, 'rb') as f:
-                    metadata = pickle.load(f)
-
-                if not isinstance(metadata, list):
-                    logger.error(
-                        f"Corrupted metadata for collection '{collection_id}'. Expected list, got {type(metadata)}.")
-                    return False
-
-                if index.ntotal != len(metadata):
-                    logger.warning(
-                        f"Index size ({index.ntotal}) and metadata length ({len(metadata)}) mismatch for '{collection_id}'. Data might be inconsistent.")
-
-                self._collections[collection_id] = (index, metadata)
-                logger.info(
-                    f"Successfully loaded collection '{collection_id}' from disk. Index size: {index.ntotal}, Metadata items: {len(metadata)}")
-                return True
-            except Exception as e:
-                logger.exception(f"Error loading collection '{collection_id}' from disk: {e}")
-                if collection_id in self._collections:
-                    del self._collections[collection_id]  # Ensure inconsistent state is removed
-                return False
-        return False
-
-    def _load_all_collections_from_disk(self) -> None:
-        if not os.path.isdir(self.base_persist_directory):
-            logger.warning(
-                f"Base persist directory '{self.base_persist_directory}' does not exist. No collections to load.")
+        if not FAISS_AVAILABLE:
+            logger.critical("FAISS or NumPy library not available. VectorDBService cannot initialize.")
             return
 
+        if not isinstance(index_dimension, int) or index_dimension <= 0:
+            logger.critical(f"Invalid index dimension provided: {index_dimension}. Cannot initialize FAISS.")
+            return
+        self._index_dim = index_dimension
+        logger.info(f"Using index dimension: {self._index_dim}")
+
+        self.base_persist_directory = base_persist_directory or constants.RAG_COLLECTIONS_PATH
+        logger.info(f"Using FAISS base persist directory: {self.base_persist_directory}")
+        try:
+            os.makedirs(self.base_persist_directory, exist_ok=True)
+            logger.info(f"FAISS base directory ensured: {self.base_persist_directory}")
+        except OSError as e:
+            logger.critical(f"Failed to create FAISS base directory '{self.base_persist_directory}': {e}")
+            return
+
+        # --- MODIFICATION START: Set _service_ready earlier ---
+        # If FAISS is available and basic checks passed, consider the service's core ready
+        # for collection management operations like loading or creating.
+        if FAISS_AVAILABLE: # Redundant check as it's done above, but good for clarity here
+            self._service_ready = True
+            logger.info("VectorDBService: Core dependencies (FAISS) ready. Proceeding with collection loading.")
+        else:
+            # This case should ideally be caught by the `if not FAISS_AVAILABLE:` check at the top of __init__.
+            # If it somehow reaches here, it's a critical failure.
+            logger.critical("VectorDBService: FAISS not available at a critical point. Cannot set service as ready.")
+            return # Service cannot function without FAISS
+        # --- MODIFICATION END ---
+
+        # --- Load Existing Collections ---
+        self._load_all_collections_from_disk()
+
+        # --- Ensure the global collection exists ---
+        # This implicitly creates and loads it if it doesn't exist.
+        # Now, get_or_create_collection can correctly check _service_ready.
+        global_coll_exists_and_loaded = self.get_or_create_collection(GLOBAL_COLLECTION_ID)
+
+        # Final check for overall service readiness (specifically if global collection is OK)
+        if global_coll_exists_and_loaded and GLOBAL_COLLECTION_ID in self._collections_data:
+             # _service_ready is already True if we reached here.
+             logger.info("VectorDBService initialized successfully and global collection is ready.")
+        else:
+             # If global collection failed despite service being "core ready", log an error.
+             # The service itself (_service_ready=True) might still be usable for other collections if they loaded correctly.
+             logger.error(
+                 "VectorDBService initialized, but the global collection ('%s') could not be properly created or loaded. "
+                 "RAG functionality relying on the global context may be impaired.", GLOBAL_COLLECTION_ID
+             )
+
+
+    def _load_all_collections_from_disk(self):
+        """Scans the base directory and attempts to load all collection data."""
+        logger.info(f"Scanning directory '{self.base_persist_directory}' for existing collections...")
         loaded_count = 0
-        for item_name in os.listdir(self.base_persist_directory):
-            collection_dir = os.path.join(self.base_persist_directory, item_name)
-            if os.path.isdir(collection_dir):
-                if self._load_collection_from_disk(item_name):
-                    loaded_count += 1
-        logger.info(f"Attempted to load all collections. Successfully loaded: {loaded_count}")
+        try:
+            if os.path.isdir(self.base_persist_directory):
+                for item_name in os.listdir(self.base_persist_directory):
+                    collection_dir = os.path.join(self.base_persist_directory, item_name)
+                    if os.path.isdir(collection_dir):
+                        collection_id = item_name # Use directory name as collection ID
+                        logger.debug(f"  Attempting to load collection '{collection_id}' from {collection_dir}...")
+                        loaded_data = self._load_collection_data(collection_id)
+                        if loaded_data:
+                            self._collections_data[collection_id] = loaded_data
+                            loaded_count += 1
+                            logger.debug(f"  Successfully loaded collection '{collection_id}'.")
+                        else:
+                            logger.warning(f"  Failed to load collection '{collection_id}'. Skipping.")
 
-    def _save_collection_to_disk(self, collection_id: str) -> bool:
-        if not FAISS_NUMPY_AVAILABLE: return False
-        if collection_id not in self._collections:
-            logger.error(f"Cannot save collection '{collection_id}': Not found in memory.")
-            return False
+            logger.info(f"Finished scanning. Loaded {loaded_count} existing collections.")
+        except Exception as e:
+            logger.exception(f"Error scanning or loading collections from disk: {e}")
 
-        index, metadata = self._collections[collection_id]
-        if index is None:  # Should not happen if collection is in _collections properly
-            logger.error(f"Cannot save collection '{collection_id}': Index is None in memory.")
-            return False
 
-        collection_path = self._get_collection_path(collection_id)
-        os.makedirs(collection_path, exist_ok=True)
-        index_file = os.path.join(collection_path, self._INDEX_FILENAME)
-        metadata_file = os.path.join(collection_path, self._METADATA_FILENAME)
+    def _load_collection_data(self, collection_id: str) -> Optional[Tuple[faiss.Index, List[Dict[str, Any]]]]:
+        """Loads a single collection's FAISS index and metadata from disk."""
+        collection_dir = os.path.join(self.base_persist_directory, collection_id)
+        index_path = os.path.join(collection_dir, "faiss.index")
+        metadata_path = os.path.join(collection_dir, "metadata.pkl") # Using pickle
+
+        if not os.path.exists(index_path) or not os.path.exists(metadata_path):
+            logger.debug(f"Collection files not found for '{collection_id}' at {collection_dir}")
+            return None
 
         try:
-            faiss.write_index(index, index_file)
-            with open(metadata_file, 'wb') as f:
+            if faiss is None:
+                logger.error("FAISS library not available for reading index.")
+                return None
+            index = faiss.read_index(index_path)
+            with open(metadata_path, 'rb') as f:
+                metadata = pickle.load(f)
+
+            if not isinstance(metadata, list):
+                 logger.error(f"Loaded metadata for '{collection_id}' is not a list ({type(metadata)}). Corrupt?")
+                 return None
+
+            if index.ntotal != len(metadata):
+                logger.warning(f"Mismatch between FAISS index size ({index.ntotal}) and metadata count ({len(metadata)}) for collection '{collection_id}'. Data might be inconsistent.")
+
+            if index.d != self._index_dim:
+                 logger.error(f"Loaded FAISS index dimension ({index.d}) for collection '{collection_id}' does not match service dimension ({self._index_dim}). Cannot load.")
+                 return None
+
+            return index, metadata
+        except Exception as e:
+            logger.error(f"Error loading collection data for '{collection_id}': {e}")
+            return None
+
+    def _save_collection_data(self, collection_id: str, index: faiss.Index, metadata: List[Dict[str, Any]]) -> bool:
+        """Saves a single collection's FAISS index and metadata to disk."""
+        if not FAISS_AVAILABLE:
+             logger.error("Cannot save collection data: FAISS not available.")
+             return False
+
+        collection_dir = os.path.join(self.base_persist_directory, collection_id)
+        index_path = os.path.join(collection_dir, "faiss.index")
+        metadata_path = os.path.join(collection_dir, "metadata.pkl")
+
+        try:
+            os.makedirs(collection_dir, exist_ok=True)
+            faiss.write_index(index, index_path)
+            with open(metadata_path, 'wb') as f:
                 pickle.dump(metadata, f)
-            logger.info(
-                f"Successfully saved collection '{collection_id}' to disk. Index size: {index.ntotal}, Metadata items: {len(metadata)}")
+            logger.debug(f"Saved collection '{collection_id}' to {collection_dir}")
             return True
         except Exception as e:
-            logger.exception(f"Error saving collection '{collection_id}' to disk: {e}")
+            logger.exception(f"Error saving collection data for '{collection_id}': {e}")
             return False
+
 
     def get_or_create_collection(self, collection_id: str) -> bool:
-        if not FAISS_NUMPY_AVAILABLE: return False
-        if collection_id in self._collections and self._collections[collection_id][0] is not None:
-            return True
+        """
+        Ensures a collection exists and is loaded into memory.
+        If it doesn't exist on disk, creates a new empty one.
+        """
+        if not FAISS_AVAILABLE or not self._service_ready:
+             logger.error(f"Cannot get/create collection '{collection_id}': FAISS not available ({FAISS_AVAILABLE}) or Service not ready ({self._service_ready}).")
+             return False
 
-        if self._load_collection_from_disk(collection_id):
-            return True
+        if not isinstance(collection_id, str) or not collection_id.strip():
+             logger.error("Cannot get/create collection: Invalid or empty collection_id provided.")
+             return False
 
-        logger.info(f"Collection '{collection_id}' not found. Creating new empty collection.")
+        if collection_id in self._collections_data:
+             logger.debug(f"Collection '{collection_id}' already loaded in memory.")
+             return True
+
+        loaded_data = self._load_collection_data(collection_id)
+        if loaded_data:
+             self._collections_data[collection_id] = loaded_data
+             logger.info(f"Loaded collection '{collection_id}' from disk.")
+             return True
+
+        logger.info(f"Collection '{collection_id}' not found. Creating new...")
         try:
-            index = faiss.IndexFlatL2(self.index_dimension)
-            metadata: List[Dict[str, Any]] = []
-            self._collections[collection_id] = (index, metadata)
-            return self._save_collection_to_disk(collection_id)
+            if faiss is None:
+                logger.error("FAISS library became unavailable during get_or_create_collection.")
+                return False
+            new_index = faiss.IndexFlatL2(self._index_dim)
+            new_metadata: List[Dict[str, Any]] = []
+            if self._save_collection_data(collection_id, new_index, new_metadata):
+                self._collections_data[collection_id] = (new_index, new_metadata)
+                logger.info(f"Created and loaded new collection '{collection_id}'.")
+                return True
+            else:
+                 logger.error(f"Failed to save newly created collection '{collection_id}' to disk.")
+                 return False
         except Exception as e:
-            logger.exception(f"Failed to create new FAISS index for collection '{collection_id}': {e}")
-            if collection_id in self._collections:  # Clean up if partially added
-                del self._collections[collection_id]
+            logger.exception(f"Error creating new collection '{collection_id}': {e}")
             return False
 
     def is_ready(self, collection_id: Optional[str] = None) -> bool:
-        if not FAISS_NUMPY_AVAILABLE: return False
-        if collection_id:
-            return collection_id in self._collections and self._collections[collection_id][0] is not None
+        """
+        Checks if the service is overall ready (FAISS available, initialized)
+        and optionally if a specific collection is loaded in memory.
+        """
+        logger.debug(
+            f"[RAG_VIEW_DEBUG] is_ready called. collection_id: '{collection_id}', "
+            f"_service_ready: {self._service_ready}, FAISS_AVAILABLE: {FAISS_AVAILABLE}"
+        )
+        logger.debug(
+            f"[RAG_VIEW_DEBUG] Current _collections_data keys: {list(self._collections_data.keys())}"
+        )
 
-        # Check if global collection is ready as a general service readiness indicator
-        return constants.GLOBAL_RAG_COLLECTION_ID in self._collections and \
-            self._collections[constants.GLOBAL_RAG_COLLECTION_ID][0] is not None
-
-    def add_embeddings(self, collection_id: str, embeddings: np.ndarray, metadatas: List[Dict[str, Any]]) -> bool:
-        if not FAISS_NUMPY_AVAILABLE: return False
-        if not self.get_or_create_collection(collection_id):  # Ensure collection exists
-            logger.error(f"Failed to add embeddings: Collection '{collection_id}' could not be accessed/created.")
+        if not FAISS_AVAILABLE or not self._service_ready:
+            logger.debug(
+                f"[RAG_VIEW_DEBUG] is_ready returning False (FAISS_AVAILABLE={FAISS_AVAILABLE}, "
+                f"_service_ready={self._service_ready})"
+            )
             return False
 
-        index, collection_metadata_list = self._collections[collection_id]
-        if index is None:  # Should be created by get_or_create_collection
-            logger.error(
-                f"Index for collection '{collection_id}' is None after ensuring collection. This should not happen.")
-            return False
+        if collection_id is None:
+            is_global_loaded = GLOBAL_COLLECTION_ID in self._collections_data
+            logger.debug(
+                f"[RAG_VIEW_DEBUG] is_ready (global check for '{GLOBAL_COLLECTION_ID}') returning {is_global_loaded}."
+            )
+            return is_global_loaded
 
-        if not isinstance(embeddings, np.ndarray) or embeddings.ndim != 2 or embeddings.shape[
-            1] != self.index_dimension:
-            logger.error(
-                f"Invalid embeddings shape for collection '{collection_id}'. Expected (n, {self.index_dimension}), got {embeddings.shape if isinstance(embeddings, np.ndarray) else type(embeddings)}")
-            return False
-        if len(embeddings) != len(metadatas):
-            logger.error(
-                f"Embeddings count ({len(embeddings)}) and metadatas count ({len(metadatas)}) mismatch for '{collection_id}'.")
-            return False
-        if len(embeddings) == 0:
-            logger.info(f"No embeddings provided to add to collection '{collection_id}'.")
-            return True
+        is_specific_loaded = collection_id in self._collections_data
+        logger.debug(
+            f"[RAG_VIEW_DEBUG] is_ready (specific check for '{collection_id}') returning {is_specific_loaded}."
+        )
+        return is_specific_loaded
 
-        try:
-            index.add(embeddings.astype(np.float32))
-            collection_metadata_list.extend(metadatas)
-            logger.info(f"Added {len(embeddings)} embeddings to collection '{collection_id}' in memory.")
-            return self._save_collection_to_disk(collection_id)
-        except Exception as e:
-            logger.exception(f"Error adding embeddings to FAISS index for collection '{collection_id}': {e}")
-            return False
-
-    def search(self, collection_id: str, query_embedding: np.ndarray, k: int) -> List[Dict[str, Any]]:
-        if not FAISS_NUMPY_AVAILABLE: return []
-        if collection_id not in self._collections:
-            logger.warning(f"Collection '{collection_id}' not found for search.")
-            return []
-
-        index, metadata_list = self._collections[collection_id]
-        if index is None or index.ntotal == 0:
-            logger.info(f"Collection '{collection_id}' is empty or index is None. No search results.")
-            return []
-
-        if not isinstance(query_embedding, np.ndarray) or query_embedding.ndim != 2 or query_embedding.shape[0] != 1 or \
-                query_embedding.shape[1] != self.index_dimension:
-            logger.error(
-                f"Invalid query embedding shape for search. Expected (1, {self.index_dimension}), got {query_embedding.shape if isinstance(query_embedding, np.ndarray) else type(query_embedding)}")
-            return []
-
-        effective_k = min(k, index.ntotal)
-        if effective_k <= 0:
-            return []
-
-        try:
-            distances, indices = index.search(query_embedding.astype(np.float32), effective_k)
-            results = []
-            for i in range(effective_k):
-                idx = indices[0][i]
-                dist = distances[0][i]
-                if 0 <= idx < len(metadata_list):
-                    # Return a copy of metadata to prevent external modification
-                    result_item = metadata_list[idx].copy()
-                    result_item['distance'] = float(dist)
-                    results.append(result_item)
-                else:
-                    logger.warning(
-                        f"Search index {idx} out of bounds for metadata list (len {len(metadata_list)}) in collection '{collection_id}'.")
-            logger.info(f"Search in '{collection_id}' found {len(results)} results for k={effective_k}.")
-            return results
-        except Exception as e:
-            logger.exception(f"Error during FAISS search in collection '{collection_id}': {e}")
-            return []
-
-    def get_collection_size(self, collection_id: str) -> int:
-        if collection_id in self._collections:
-            index, _ = self._collections[collection_id]
-            if index:
-                return index.ntotal
-        return 0
-
-    def get_all_metadata(self, collection_id: str) -> List[Dict[str, Any]]:
-        if collection_id in self._collections:
-            _, metadata_list = self._collections[collection_id]
-            return [m.copy() for m in metadata_list]  # Return copies
-        return []
-
-    def get_available_collection_ids(self) -> List[str]:
-        return list(self._collections.keys())
+    def get_available_collections(self) -> List[str]:
+        return list(self._collections_data.keys())
 
     def delete_collection(self, collection_id: str) -> bool:
-        if collection_id == constants.GLOBAL_RAG_COLLECTION_ID:
-            logger.error(f"Deletion of the global RAG collection '{collection_id}' is not allowed.")
-            return False
+        if not self._service_ready:
+             logger.error(f"Cannot delete collection '{collection_id}': Service not ready."); return False
+        if collection_id == GLOBAL_COLLECTION_ID:
+            logger.error(f"Cannot delete the global collection '{GLOBAL_COLLECTION_ID}'."); return False
 
-        if collection_id in self._collections:
-            del self._collections[collection_id]
-            logger.info(f"Removed collection '{collection_id}' from memory.")
+        collection_dir = os.path.join(self.base_persist_directory, collection_id)
+        removed_from_memory = False
+        if collection_id in self._collections_data:
+            del self._collections_data[collection_id]
+            removed_from_memory = True
+            logger.debug(f"Collection '{collection_id}' removed from memory.")
+        else:
+            logger.warning(f"Attempted to delete collection '{collection_id}', but it's not loaded in memory.")
 
-        collection_path = self._get_collection_path(collection_id)
-        if os.path.exists(collection_path):
-            try:
-                shutil.rmtree(collection_path)
-                logger.info(f"Successfully deleted collection '{collection_id}' from disk: {collection_path}")
-                return True
-            except Exception as e:
-                logger.exception(f"Error deleting collection directory '{collection_path}' from disk: {e}")
-                return False
-        logger.warning(
-            f"Collection '{collection_id}' not found on disk for deletion, but removed from memory if present.")
-        return True  # Considered success if not on disk and removed from memory
+        disk_deleted = False
+        if os.path.isdir(collection_dir):
+             logger.info(f"Attempting to delete collection directory from disk: {collection_dir}")
+             try:
+                 shutil.rmtree(collection_dir)
+                 logger.info(f"Collection directory '{collection_id}' deleted successfully from disk.")
+                 disk_deleted = True
+             except Exception as e:
+                  logger.exception(f"Error deleting collection directory '{collection_id}': {e}")
+        else:
+             logger.warning(f"Collection directory '{collection_id}' not found on disk either.")
+             if not removed_from_memory: return False
 
-    def clear_collection_content(self, collection_id: str) -> bool:
-        if not FAISS_NUMPY_AVAILABLE: return False
-        if collection_id not in self._collections:
-            logger.warning(f"Cannot clear content: Collection '{collection_id}' not loaded.")
-            if self.get_or_create_collection(collection_id):  # Try to load/create it
-                logger.info(f"Collection '{collection_id}' loaded/created, now attempting clear.")
-            else:
-                logger.error(f"Failed to load/create collection '{collection_id}' for clearing.")
-                return False
+        return removed_from_memory or disk_deleted
 
-        logger.info(f"Clearing all content from collection '{collection_id}'.")
+    def add_embeddings(self, collection_id: str, embeddings: np.ndarray, metadatas: List[Dict[str, Any]]) -> bool:
+        if not self.is_ready(collection_id):
+            logger.error(f"Cannot add embeddings: Collection '{collection_id}' not loaded or service not ready."); return False
+        if not isinstance(embeddings, np.ndarray) or not isinstance(metadatas, list):
+            logger.error("Invalid input: embeddings must be a NumPy array, metadatas a list."); return False
+        if embeddings.shape[0] != len(metadatas):
+            logger.error(f"Input length mismatch: embeddings count ({embeddings.shape[0]}) != metadata count ({len(metadatas)})."); return False
+        if embeddings.ndim != 2 or embeddings.shape[1] != self._index_dim: # Added ndim check
+             logger.error(f"Embedding dimension mismatch or incorrect shape: Got {embeddings.shape}, expected (n, {self._index_dim})."); return False
+        if embeddings.shape[0] == 0:
+             logger.warning(f"No embeddings provided to add to collection '{collection_id}'."); return True
+
+        collection_index, collection_metadata = self._collections_data[collection_id]
+        logger.info(f"Adding {embeddings.shape[0]} embeddings to collection '{collection_id}'...")
         try:
-            new_index = faiss.IndexFlatL2(self.index_dimension)
-            new_metadata: List[Dict[str, Any]] = []
-            self._collections[collection_id] = (new_index, new_metadata)
-            return self._save_collection_to_disk(collection_id)  # Save the empty state
+            collection_index.add(embeddings)
+            collection_metadata.extend(metadatas)
+            if self._save_collection_data(collection_id, collection_index, collection_metadata):
+                 logger.info(f"Successfully added and saved {embeddings.shape[0]} embeddings to '{collection_id}'.")
+                 return True
+            else:
+                 logger.error(f"Successfully added embeddings to '{collection_id}' index but FAILED TO SAVE metadata/index.")
+                 return False
         except Exception as e:
-            logger.exception(f"Error clearing content from collection '{collection_id}': {e}")
+            logger.exception(f"Error adding embeddings to collection '{collection_id}': {e}")
             return False
 
-    def shutdown(self) -> None:
-        logger.info("VectorDBService shutting down. Saving all collections...")
-        for collection_id in list(self._collections.keys()):  # Iterate over keys copy
-            self._save_collection_to_disk(collection_id)
-        logger.info("All collections saved. VectorDBService shutdown complete.")
+    def search(self, collection_id: str, query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
+        if not self.is_ready(collection_id):
+            logger.error(f"Cannot search: Collection '{collection_id}' not loaded or service not ready."); return []
+        if not isinstance(query_embedding, np.ndarray) or query_embedding.ndim != 2 or query_embedding.shape[0] != 1 or query_embedding.shape[1] != self._index_dim :
+            logger.error(f"Invalid query embedding format/dimension: Expected (1, {self._index_dim}), got {query_embedding.shape}."); return []
+        if not isinstance(k, int) or k <= 0:
+             logger.warning(f"Invalid k value ({k}), using default 5."); k = 5
+
+        collection_index, collection_metadata = self._collections_data[collection_id]
+        if collection_index.ntotal == 0:
+             logger.info(f"Collection '{collection_id}' is empty. Returning no search results."); return []
+        effective_k = min(k, collection_index.ntotal)
+        if effective_k == 0: return []
+
+        logger.info(f"Searching collection '{collection_id}' ({collection_index.ntotal} items) with k={effective_k}...")
+        try:
+            distances, indices = collection_index.search(query_embedding, effective_k)
+            results = []
+            for i in range(effective_k):
+                vector_index_in_collection = indices[0][i]
+                distance_val = distances[0][i]
+                if vector_index_in_collection == -1: continue
+                if 0 <= vector_index_in_collection < len(collection_metadata):
+                    metadata = collection_metadata[vector_index_in_collection]
+                    content = metadata.get('content', '[Content not found in metadata]')
+                    if "collection_id" not in metadata: metadata["collection_id"] = collection_id
+                    results.append({'content': content, 'metadata': metadata, 'distance': float(distance_val)})
+                else:
+                    logger.warning(f"Search returned index {vector_index_in_collection} for collection '{collection_id}' out of bounds for metadata ({len(collection_metadata)}).")
+            logger.info(f"Search completed for collection '{collection_id}'. Found {len(results)} relevant items.")
+            return results
+        except Exception as e:
+            logger.exception(f"Error searching collection '{collection_id}': {e}")
+            return []
+
+    def get_all_metadata(self, collection_id: str) -> List[Dict[str, Any]]:
+        if not self.is_ready(collection_id):
+            logger.error(f"Cannot get metadata: Collection '{collection_id}' not loaded or service not ready."); return []
+        _, collection_metadata = self._collections_data[collection_id]
+        logger.info(f"Retrieving all metadata ({len(collection_metadata)} items) from collection '{collection_id}'.")
+        return list(collection_metadata)
+
+    def get_collection_size(self, collection_id: str) -> int:
+        logger.debug(f"[RAG_VIEW_DEBUG] get_collection_size called for ID: '{collection_id}'")
+        if not self.is_ready(collection_id):
+            logger.warning(f"[RAG_VIEW_DEBUG] Cannot get size for '{collection_id}': is_ready() returned False."); return -1
+        try:
+            if collection_id not in self._collections_data:
+                 logger.warning(f"[RAG_VIEW_DEBUG] Cannot get size: Collection ID '{collection_id}' not found in _collections_data, though is_ready passed for it. This is unexpected."); return -1
+
+            collection_index, _ = self._collections_data[collection_id]
+            count = collection_index.ntotal
+            logger.debug(f"[RAG_VIEW_DEBUG] Collection '{collection_id}' FAISS index.ntotal = {count}")
+            return count
+        except KeyError:
+            logger.warning(f"[RAG_VIEW_DEBUG] Cannot get size: Collection ID '{collection_id}' not found in _collections_data (KeyError during access)."); return -1
+        except Exception as e:
+            logger.exception(f"[RAG_VIEW_DEBUG] Error getting count for collection '{collection_id}': {e}"); return -1
+
+    def clear_collection(self, collection_id: str) -> bool:
+        if collection_id == GLOBAL_COLLECTION_ID:
+             logger.error(f"Clearing the global collection ('{GLOBAL_COLLECTION_ID}') is not permitted via this method."); return False
+        if not self.is_ready(collection_id):
+             logger.error(f"Cannot clear collection '{collection_id}': Not loaded or service not ready."); return False
+
+        logger.warning(f"Attempting to clear all items from collection '{collection_id}' by re-creating index and metadata...")
+        try:
+            if faiss is None:
+                logger.error("FAISS library not available for clearing collection.")
+                return False
+            new_index = faiss.IndexFlatL2(self._index_dim)
+            new_metadata: List[Dict[str, Any]] = []
+            if self._save_collection_data(collection_id, new_index, new_metadata):
+                 self._collections_data[collection_id] = (new_index, new_metadata)
+                 logger.info(f"Collection '{collection_id}' cleared successfully (by recreating).")
+                 return True
+            else:
+                 logger.error(f"Failed to save cleared collection '{collection_id}' to disk.")
+                 return False
+        except Exception as e:
+            logger.exception(f"Error during the process of clearing collection '{collection_id}': {e}")
+            return False
