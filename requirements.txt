@@ -1,4 +1,4 @@
-# === requirements.txt ===
+# requirements.txt
 # Core GUI Framework
 PyQt6
 PyQt6-sip
@@ -30,6 +30,7 @@ python-docx # For reading DOCX files
 # --- UI Enhancements & Utilities ---
 Markdown    # For rendering Markdown in chat bubbles
 Pillow      # For image handling (loading, resizing, encoding)
+rich        # For beautiful terminal output!
 
 # --- Configuration & Environment ---
 # Library to load environment variables from .env files
