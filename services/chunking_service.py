@@ -1,6 +1,3 @@
-# services/chunking_service.py
-# UPDATED FILE - Added start_line and end_line calculation to chunk metadata
-
 import bisect  # Using bisect for efficient line number lookup
 import logging
 import os
@@ -128,58 +125,65 @@ class ChunkingService:
 
             # --- Format output ---
             chunks = []
-            current_pos = 0  # Track position in original content for approximate start_index search
+            # --- MODIFIED: Robust chunk position tracking ---
+            original_content_search_offset = 0 # Start searching from the beginning of the original content
 
-            for i, text_chunk in enumerate(split_texts):
-                if not text_chunk.strip():  # Skip empty chunks if splitter produces them
+            for i, text_chunk_content in enumerate(split_texts):
+                if not text_chunk_content.strip():  # Skip empty chunks if splitter produces them
                     logger.debug(f"Skipping empty chunk {i} for '{filename_base}'")
                     continue
 
-                # --- Find approximate character start/end indices ---
-                chunk_start_in_original = -1
-                # Try finding from current_pos first for better accuracy with overlaps
-                try:
-                    chunk_start_in_original = content.find(text_chunk, current_pos)
-                except Exception:
-                    pass  # Ignore potential errors in find
+                # Try to find the current chunk_content in the original_content,
+                # starting from original_content_search_offset.
+                chunk_start_char_index = content.find(text_chunk_content, original_content_search_offset)
 
-                if chunk_start_in_original == -1:
-                    # Fallback: search from the beginning (less accurate with identical chunks)
-                    try:
-                        chunk_start_in_original = content.find(text_chunk)
-                    except Exception:
-                        pass
-
-                if chunk_start_in_original == -1:
-                    # If still not found, use the previous position as a rough estimate
-                    chunk_start_in_original = current_pos
+                if chunk_start_char_index == -1:
+                    # If not found from current offset, it's possible due to aggressive splitting
+                    # or highly repetitive content. Try a broader search FROM THE START, but log a warning.
                     logger.warning(
-                        f"Could not reliably find start index for chunk {i} of '{filename_base}'. Using estimated position {current_pos}.")
+                        f"Chunk {i} ('{text_chunk_content[:30]}...') for '{filename_base}' not found starting at offset {original_content_search_offset}. "
+                        f"Retrying search from document start. This may affect line number accuracy for repetitive content."
+                    )
+                    chunk_start_char_index = content.find(text_chunk_content) # Search from document beginning
+                    if chunk_start_char_index == -1:
+                        logger.error(
+                            f"CRITICAL FAILURE: Chunk {i} ('{text_chunk_content[:30]}...') for '{filename_base}' "
+                            f"NOT FOUND ANYWHERE in the original document. Skipping this chunk. Splitter: {type(splitter_to_use).__name__}."
+                        )
+                        # This chunk is unrecoverable with current strategy, skip it.
+                        # Update offset to where this chunk *would have* ended if it was found at the current search point,
+                        # to try and recover for subsequent chunks. This is a best guess.
+                        original_content_search_offset += len(text_chunk_content) - self.chunk_overlap
+                        original_content_search_offset = max(0, original_content_search_offset) # ensure non-negative
+                        continue
+                # --- END MODIFIED ---
 
-                chunk_end_in_original = chunk_start_in_original + len(text_chunk)
-                # ----------------------------------------------------
+                chunk_end_char_index = chunk_start_char_index + len(text_chunk_content)
 
                 # --- Calculate start_line and end_line ---
-                start_line = self._get_line_number(chunk_start_in_original, line_start_indices)
+                start_line = self._get_line_number(chunk_start_char_index, line_start_indices)
                 # For end_line, we need the line number containing the *last character* of the chunk.
-                last_char_index = max(0, chunk_end_in_original - 1)
-                end_line = self._get_line_number(last_char_index, line_start_indices)
+                last_char_index_of_chunk = max(0, chunk_end_char_index - 1)
+                end_line = self._get_line_number(last_char_index_of_chunk, line_start_indices)
                 # ---------------------------------------
 
                 metadata = {
                     "source": str(source_id),
                     "filename": filename_base,
                     "chunk_index": i,  # Index of the chunk within this document
-                    "start_index": chunk_start_in_original,  # Approximate start char index
-                    "content": text_chunk,  # IMPORTANT: Store original chunk content in metadata for DB lookup/display
-                    "start_line": start_line,  # <-- ADDED
-                    "end_line": end_line,  # <-- ADDED
+                    "start_index": chunk_start_char_index,  # Store the found start character index
+                    "content": text_chunk_content,  # IMPORTANT: Store original chunk content in metadata for DB lookup/display
+                    "start_line": start_line,
+                    "end_line": end_line,
                 }
-                chunks.append({"content": text_chunk, "metadata": metadata})
+                chunks.append({"content": text_chunk_content, "metadata": metadata})
 
-                # Update position for next search (move past the start of this chunk)
-                # Add a small increment to handle potential overlaps correctly
-                current_pos = chunk_start_in_original + 1
+                # --- MODIFIED: Update search offset for the next chunk ---
+                # Advance the offset to start searching for the next chunk just after
+                # the beginning of the current chunk's found location.
+                # This helps prevent re-finding the same spot if chunks are identical or nearly so.
+                original_content_search_offset = chunk_start_char_index + 1
+                # --- END MODIFIED ---
 
             logger.info(
                 f"{type(splitter_to_use).__name__} created {len(chunks)} non-empty chunks for {filename_base} (with line numbers)")
