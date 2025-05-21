@@ -43,7 +43,19 @@ except ImportError as e:
         print(f"Failed to show import error message: {e_qm}", file=sys.stderr)
     sys.exit(1)
 
+# --- MODIFICATION: Adjust log levels for verbose libraries ---
+# Do this BEFORE basicConfig if you want basicConfig to respect these specific levels
+# and not override them for these loggers (depending on basicConfig's force/disable_existing_loggers).
+# If basicConfig has force=True, it might reconfigure them anyway, but setting them
+# explicitly here is good practice.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.INFO) # OpenAI can still be a bit chatty
+# --- END MODIFICATION ---
+
 log_level_actual = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
+# Using force=True ensures that if other parts of the code called basicConfig earlier
+# (e.g. a library), our settings take precedence for the root logger and handlers.
 logging.basicConfig(level=log_level_actual, format=LOG_FORMAT, handlers=[logging.StreamHandler()], force=True)
 logger = logging.getLogger(__name__)
 
@@ -155,14 +167,9 @@ async def async_main():
 
     logger.info("--- async_main: Entering main blocking phase (await asyncio.Future()) ---")
     if app:
-        # This future is what keeps async_main alive.
-        # qasync's event loop will run, processing Qt events.
-        # When the Qt app quits (e.g., last window closed), qasync's loop should stop,
-        # which in turn should cause this Future to complete or be cancelled.
         await asyncio.Future()
         logger.info("--- async_main: asyncio.Future() completed. Application is shutting down. ---")
     else:
-        # This case should ideally not be reached if app initialization was successful
         logger.error("--- async_main: app instance is None. Cannot block. Application will likely exit. ---")
 
     logger.info(f"--- async_main returning, Application Event Loop should be finishing ---")
@@ -194,7 +201,7 @@ if __name__ == "__main__":
     except RuntimeError as e:
         if "cannot be nested" in str(e).lower() or "already running" in str(e).lower():
             logger.warning(f"qasync event loop issue: {e}. Loop may already be running (e.g. interactive environment).")
-            if QApplication.instance() and QApplication.instance().activeWindow():
+            if QApplication.instance() and QApplication.instance().activeWindow(): # type: ignore
                 pass
             else:
                 exit_code = 1
