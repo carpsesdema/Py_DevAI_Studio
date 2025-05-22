@@ -58,7 +58,6 @@ except ImportError as e:
     PROJECT_SUMMARY_COORDINATOR_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import ProjectSummaryCoordinator: {e}.")
 
-# --- NEW: Import ChangeApplierService ---
 try:
     from core.change_applier_service import ChangeApplierService
 
@@ -67,13 +66,11 @@ except ImportError as e:
     ChangeApplierService = None  # type: ignore
     CHANGE_APPLIER_SERVICE_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import ChangeApplierService: {e}.")
-# --- END NEW ---
 
 from services.session_service import SessionService
 from services.upload_service import UploadService
 from services.vector_db_service import VectorDBService
 
-# --- ADD IMPORT FOR THE NEW LOGGER ---
 try:
     from services.llm_communication_logger import LlmCommunicationLogger
 
@@ -82,7 +79,10 @@ except ImportError as e:
     LlmCommunicationLogger = None  # type: ignore
     LLM_COMM_LOGGER_AVAILABLE = False
     logging.error(f"ApplicationOrchestrator: Failed to import LlmCommunicationLogger: {e}")
-# --- END IMPORT ---
+
+from core.modification_sequence_manager import ModificationSequenceManager
+from core.chat_interaction_handler import ChatInteractionHandler
+
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,34 @@ class ApplicationOrchestrator:
             logger.warning(
                 "ApplicationOrchestrator: ModificationCoordinator cannot be instantiated (dependencies missing or import failed).")
 
+
+        self.modification_sequence_manager: Optional[ModificationSequenceManager] = None
+        if self.modification_coordinator and self.backend_coordinator: # Removed llm_comm_logger from direct deps for now if it can be None
+            try:
+                self.modification_sequence_manager = ModificationSequenceManager(
+                    modification_coordinator=self.modification_coordinator,
+                    backend_coordinator=self.backend_coordinator,
+                    llm_comm_logger=self.llm_communication_logger # Pass it if available
+                )
+                logger.info("ApplicationOrchestrator: ModificationSequenceManager instantiated.")
+            except Exception as e:
+                logger.error(f"ApplicationOrchestrator: Failed to instantiate ModificationSequenceManager: {e}", exc_info=True)
+        else:
+            logger.warning("ApplicationOrchestrator: ModificationSequenceManager NOT instantiated due to missing dependencies (MC, BC).")
+
+        self.chat_interaction_handler: Optional[ChatInteractionHandler] = None
+        if self.backend_coordinator:
+            try:
+                self.chat_interaction_handler = ChatInteractionHandler(
+                    backend_coordinator=self.backend_coordinator
+                )
+                logger.info("ApplicationOrchestrator: ChatInteractionHandler instantiated.")
+            except Exception as e:
+                logger.error(f"ApplicationOrchestrator: Failed to instantiate ChatInteractionHandler: {e}", exc_info=True)
+        else:
+            logger.warning("ApplicationOrchestrator: ChatInteractionHandler NOT instantiated due to missing BackendCoordinator.")
+
+
         self.session_flow_manager: Optional[SessionFlowManager] = None
         if self._session_service and self.project_context_manager and self.backend_coordinator:
             self.session_flow_manager = SessionFlowManager(
@@ -214,21 +242,19 @@ class ApplicationOrchestrator:
             logger.warning(
                 "ApplicationOrchestrator: ProjectSummaryCoordinator cannot be instantiated (dependencies or import failed).")
 
-        # Instantiate UploadCoordinator (needs project_summary_coordinator)
         self.upload_coordinator: Optional[UploadCoordinator] = None
         if self._upload_service and self.project_context_manager:
             try:
                 self.upload_coordinator = UploadCoordinator(
                     upload_service=self._upload_service,
                     project_context_manager=self.project_context_manager,
-                    project_summary_coordinator=self.project_summary_coordinator # Pass the coordinator
+                    project_summary_coordinator=self.project_summary_coordinator
                 )
             except Exception as e:
                 logger.error(f"ApplicationOrchestrator: Failed to instantiate UploadCoordinator: {e}", exc_info=True)
         else:
             logger.error("ApplicationOrchestrator: Cannot initialize UploadCoordinator (UploadService or ProjectContextManager missing).")
 
-        # Instantiate ChangeApplierService (needs upload_coordinator and file_handler_service from upload_service)
         self.change_applier_service: Optional[ChangeApplierService] = None
         if CHANGE_APPLIER_SERVICE_AVAILABLE and ChangeApplierService is not None and \
                 hasattr(self._upload_service, '_file_handler_service') and self.upload_coordinator:
@@ -236,7 +262,7 @@ class ApplicationOrchestrator:
                 file_handler_service_instance = getattr(self._upload_service, '_file_handler_service', None)
                 if file_handler_service_instance and self.upload_coordinator:
                     self.change_applier_service = ChangeApplierService(
-                        file_handler_service=file_handler_service_instance,  # type: ignore
+                        file_handler_service=file_handler_service_instance,
                         upload_coordinator=self.upload_coordinator
                     )
                     logger.info("ApplicationOrchestrator: ChangeApplierService instantiated.")
@@ -298,6 +324,12 @@ class ApplicationOrchestrator:
 
     def get_modification_coordinator(self) -> Optional[ModificationCoordinator]:
         return self.modification_coordinator
+
+    def get_modification_sequence_manager(self) -> Optional[ModificationSequenceManager]:
+        return self.modification_sequence_manager
+
+    def get_chat_interaction_handler(self) -> Optional[ChatInteractionHandler]:
+        return self.chat_interaction_handler
 
     def get_project_summary_coordinator(self) -> Optional[ProjectSummaryCoordinator]:
         return self.project_summary_coordinator

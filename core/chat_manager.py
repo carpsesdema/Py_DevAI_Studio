@@ -1,9 +1,10 @@
+# core/chat_manager.py
 import logging
 import os
 import uuid
 from typing import List, Optional, Dict, Any
 
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from core.message_enums import MessageLoadingState
@@ -24,12 +25,15 @@ except ImportError:
 
 from .modification_coordinator import ModPhase, ModificationCoordinator
 from .project_context_manager import ProjectContextManager
-from .backend_coordinator import BackendCoordinator
+from .backend_coordinator import BackendCoordinator # Still needed for config
 from .project_summary_coordinator import ProjectSummaryCoordinator
 from .session_flow_manager import SessionFlowManager
 from .upload_coordinator import UploadCoordinator
 from .application_orchestrator import ApplicationOrchestrator
-from .change_applier_service import ChangeApplierService  # Import new service
+from .change_applier_service import ChangeApplierService
+from .modification_sequence_manager import ModificationSequenceManager
+from .chat_interaction_handler import ChatInteractionHandler
+
 
 from utils import constants
 from utils.constants import (
@@ -93,9 +97,9 @@ class ChatManager(QObject):
     busy_state_changed = pyqtSignal(bool)
     backend_config_state_changed = pyqtSignal(str, str, bool, bool)
     available_models_changed_for_backend = pyqtSignal(str, list)
-    stream_started = pyqtSignal(str)
-    stream_chunk_received = pyqtSignal(str)
-    stream_finished = pyqtSignal()
+    stream_started = pyqtSignal(str) # Will be emitted by ChatInteractionHandler via CM
+    stream_chunk_received = pyqtSignal(str) # Will be emitted by CIH via CM
+    stream_finished = pyqtSignal() # Will be emitted by CIH via CM
     code_file_updated = pyqtSignal(str, str)
     current_project_changed = pyqtSignal(str)
     project_inventory_updated = pyqtSignal(dict)
@@ -114,22 +118,27 @@ class ChatManager(QObject):
         self._backend_adapters_dict = self._orchestrator.get_all_backend_adapters_dict()
 
         self._project_context_manager = self._orchestrator.get_project_context_manager()
-        if self._project_context_manager: self._project_context_manager.setParent(self)
         self._backend_coordinator = self._orchestrator.get_backend_coordinator()
-        if self._backend_coordinator: self._backend_coordinator.setParent(self)
         self._session_flow_manager = self._orchestrator.get_session_flow_manager()
-        if self._session_flow_manager: self._session_flow_manager.setParent(self)
         self._upload_coordinator = self._orchestrator.get_upload_coordinator()
-        if self._upload_coordinator: self._upload_coordinator.setParent(self)
         self._user_input_handler = self._orchestrator.get_user_input_handler()
-        if self._user_input_handler: self._user_input_handler.setParent(self)
-        self._modification_coordinator = self._orchestrator.get_modification_coordinator()
-        if self._modification_coordinator: self._modification_coordinator.setParent(self)
+        self._modification_coordinator = self._orchestrator.get_modification_coordinator() # Still needed for UIH
+        self._modification_sequence_manager = self._orchestrator.get_modification_sequence_manager()
+        self._chat_interaction_handler = self._orchestrator.get_chat_interaction_handler()
+
+
+        for component in [self._project_context_manager, self._backend_coordinator,
+                          self._session_flow_manager, self._upload_coordinator,
+                          self._user_input_handler, self._modification_coordinator,
+                          self._modification_sequence_manager, self._chat_interaction_handler]:
+            if component and component.parent() is None: # Check if parent is already set
+                component.setParent(self)
+
+
         self._project_summary_coordinator = self._orchestrator.get_project_summary_coordinator()
-        # --- NEW: Get ChangeApplierService from orchestrator ---
         self._change_applier_service = self._orchestrator.get_change_applier_service()
-        # --- END NEW ---
-        if self._project_summary_coordinator: self._project_summary_coordinator.setParent(self)
+        if self._project_summary_coordinator and self._project_summary_coordinator.parent() is None:
+            self._project_summary_coordinator.setParent(self)
 
         self._rag_handler = self._orchestrator.get_rag_handler()
         self._modification_handler_instance = self._orchestrator.get_modification_handler_instance()
@@ -144,6 +153,7 @@ class ChatManager(QObject):
         self._initialize_state_variables()
         self._connect_component_signals()
 
+
     def _initialize_state_variables(self):
         self._overall_busy: bool = False
         self._current_active_chat_backend_id: str = DEFAULT_CHAT_BACKEND_ID
@@ -153,7 +163,7 @@ class ChatManager(QObject):
         if DEFAULT_CHAT_BACKEND_ID in self._current_model_names: self._current_model_names[
             DEFAULT_CHAT_BACKEND_ID] = DEFAULT_GEMINI_CHAT_MODEL
         if OLLAMA_CHAT_BACKEND_ID in self._current_model_names: self._current_model_names[
-            OLLAMA_CHAT_BACKEND_ID] = "llama3:latest"  # A sensible default
+            OLLAMA_CHAT_BACKEND_ID] = "llama3:latest"
         if GPT_CHAT_BACKEND_ID in self._current_model_names: self._current_model_names[
             GPT_CHAT_BACKEND_ID] = DEFAULT_GPT_MODEL
         if PLANNER_BACKEND_ID in self._current_model_names: self._current_model_names[
@@ -181,13 +191,22 @@ class ChatManager(QObject):
         if self._project_context_manager:
             self._project_context_manager.project_list_updated.connect(self._handle_pcm_project_list_updated)
             self._project_context_manager.active_project_changed.connect(self._handle_pcm_active_project_changed)
-        if self._backend_coordinator:
-            self._backend_coordinator.stream_started.connect(self._handle_backend_stream_started)
-            self._backend_coordinator.stream_chunk_received.connect(self._handle_backend_chunk_received)
-            self._backend_coordinator.response_completed.connect(self._handle_backend_response_completed)
-            self._backend_coordinator.response_error.connect(self._handle_backend_response_error)
+
+        if self._backend_coordinator: # CM still listens for general config changes and busy state
             self._backend_coordinator.busy_state_changed.connect(self._handle_backend_busy_changed)
             self._backend_coordinator.configuration_changed.connect(self._handle_backend_configuration_changed)
+            # Specific stream/response signals for NORMAL CHAT are now handled by ChatInteractionHandler
+
+        if self._chat_interaction_handler: # CM listens to CIH for normal chat results
+            cih = self._chat_interaction_handler
+            cih.ai_stream_started.connect(self.stream_started) # Pass through
+            cih.ai_stream_chunk_received.connect(self._handle_cih_stream_chunk) # CM needs to process this
+            cih.ai_response_ready.connect(self._handle_cih_response_completed)
+            cih.ai_response_error.connect(self._handle_cih_response_error)
+        else:
+            logger.error("CM: ChatInteractionHandler is None. Cannot connect its signals.")
+
+
         if self._upload_coordinator:
             self._upload_coordinator.upload_started.connect(self._handle_upload_started)
             self._upload_coordinator.upload_summary_received.connect(self._handle_upload_summary)
@@ -200,31 +219,26 @@ class ChatManager(QObject):
             self._session_flow_manager.error_occurred.connect(self.error_occurred)
             self._session_flow_manager.request_state_save.connect(self._handle_sfm_request_state_save)
 
-        # --- MODIFIED: Connect new/renamed signals from UserInputHandler ---
         if self._user_input_handler:
             self._user_input_handler.normal_chat_request_ready.connect(self._handle_uih_normal_chat_request)
-
-            # Connect to the renamed bootstrap signal
             self._user_input_handler.bootstrap_sequence_start_requested.connect(
                 self._handle_uih_bootstrap_start_request)
-
-            # Connect to the NEW modify existing signal
             self._user_input_handler.modification_existing_sequence_start_requested.connect(
                 self._handle_uih_modification_existing_start_request)
-
             self._user_input_handler.modification_user_input_received.connect(self._handle_uih_mod_user_input)
             self._user_input_handler.processing_error_occurred.connect(self._handle_uih_processing_error)
             self._user_input_handler.user_command_for_display_only.connect(self._handle_user_command_for_display_only)
-        # --- END MODIFIED ---
 
-        if self._modification_coordinator:
-            self._modification_coordinator.request_llm_call.connect(self._handle_mc_request_llm_call)
-            self._modification_coordinator.file_ready_for_display.connect(self._handle_mc_file_ready)
-            self._modification_coordinator.modification_sequence_complete.connect(self._handle_mc_sequence_complete)
-            self._modification_coordinator.modification_error.connect(self._handle_mc_error)
-            self._modification_coordinator.status_update.connect(self._handle_mc_status_update)
-            self._modification_coordinator.code_generation_started.connect(
-                self.code_generation_process_started)
+        if self._modification_sequence_manager:
+            msm = self._modification_sequence_manager
+            msm.file_ready_for_display.connect(self._handle_msm_file_ready)
+            msm.modification_sequence_complete.connect(self._handle_msm_sequence_complete)
+            msm.modification_error.connect(self._handle_msm_error)
+            msm.status_update.connect(self._handle_msm_status_update)
+            msm.code_generation_started.connect(self.code_generation_process_started)
+        else:
+            logger.error("ChatManager: ModificationSequenceManager is None. Cannot connect its signals.")
+
 
         if self._project_summary_coordinator:
             self._project_summary_coordinator.summary_generated.connect(self._handle_project_summary_generated)
@@ -236,7 +250,6 @@ class ChatManager(QObject):
         return None
 
     def initialize(self):
-        # ... (Initialize method remains the same)
         if not (
                 self._session_flow_manager and self._project_context_manager and self._user_input_handler and self._backend_coordinator):
             missing_deps = [name for comp, name in
@@ -251,9 +264,9 @@ class ChatManager(QObject):
 
         if loaded_state and len(loaded_state) == 7:
             model_from_session, pers_from_session, proj_data_from_session, active_pid_from_session, active_backend_id_from_session, temperature_from_session, generator_model_from_session = loaded_state
-        elif loaded_state and len(loaded_state) == 6:  # Backwards compatibility for when generator_model wasn't saved
+        elif loaded_state and len(loaded_state) == 6:
             model_from_session, pers_from_session, proj_data_from_session, active_pid_from_session, active_backend_id_from_session, temperature_from_session = loaded_state
-        elif loaded_state and len(loaded_state) >= 4:  # Older format
+        elif loaded_state and len(loaded_state) >= 4:
             model_from_session, pers_from_session, proj_data_from_session, active_pid_from_session = loaded_state[:4]
 
         if active_backend_id_from_session and active_backend_id_from_session in self._current_model_names:
@@ -261,7 +274,7 @@ class ChatManager(QObject):
             if model_from_session: self._current_model_names[self._current_active_chat_backend_id] = model_from_session
             if pers_from_session: self._current_chat_personality_prompts[
                 self._current_active_chat_backend_id] = pers_from_session
-        elif model_from_session:  # Default to default chat backend if loaded backend_id is invalid
+        elif model_from_session:
             self._current_model_names[DEFAULT_CHAT_BACKEND_ID] = model_from_session
             if pers_from_session: self._current_chat_personality_prompts[DEFAULT_CHAT_BACKEND_ID] = pers_from_session
 
@@ -270,7 +283,6 @@ class ChatManager(QObject):
         if generator_model_from_session and GENERATOR_BACKEND_ID in self._current_model_names:
             self._current_model_names[GENERATOR_BACKEND_ID] = generator_model_from_session
 
-        # Ensure Generator AI always has its system prompt if none was loaded
         if GENERATOR_BACKEND_ID in self._current_chat_personality_prompts and \
                 self._current_chat_personality_prompts.get(GENERATOR_BACKEND_ID) is None:
             self._current_chat_personality_prompts[GENERATOR_BACKEND_ID] = CODER_AI_SYSTEM_PROMPT
@@ -278,38 +290,32 @@ class ChatManager(QObject):
         if proj_data_from_session:
             self._project_context_manager.load_state(proj_data_from_session)
         else:
-            # Ensure global context is the default if no project data was loaded
             self._project_context_manager.set_active_project(constants.GLOBAL_COLLECTION_ID)
 
-        self._set_initial_active_project(active_pid_from_session, None)  # Pass None for history as PCM handles it
+        self._set_initial_active_project(active_pid_from_session, None)
         self._configure_all_initial_backends()
-        self.update_status_based_on_state()  # Update status based on the loaded/default state
+        self.update_status_based_on_state()
         current_active_project_id = self._project_context_manager.get_active_project_id()
         self._update_rag_initialized_state(emit_status=False, project_id=current_active_project_id)
 
     def _perform_orphan_cleanup(self, project_context_data_from_pcm: Optional[Dict[str, Any]]):
-        # ... (remains the same)
         pass
 
-    def _set_initial_active_project(self, target_active_project_id: Optional[str], _):  # _ for unused history param
-        # ... (remains the same)
+    def _set_initial_active_project(self, target_active_project_id: Optional[str], _):
         if not self._project_context_manager: return
         effective_target_id = target_active_project_id if target_active_project_id else constants.GLOBAL_COLLECTION_ID
-        # Ensure the target ID actually exists in the PCM's loaded names/histories
         if effective_target_id not in self._project_context_manager.get_all_projects_info():
             logger.warning(f"Initial target project ID '{effective_target_id}' not found in PCM. Defaulting to Global.")
             effective_target_id = constants.GLOBAL_COLLECTION_ID
-
         self._project_context_manager.set_active_project(effective_target_id)
 
     def _configure_all_initial_backends(self):
-        # ... (remains the same)
         if not self._backend_coordinator: return
         gemini_api_key, openai_api_key = get_gemini_api_key(), get_openai_api_key()
 
         for backend_id in self._backend_adapters_dict.keys():
             model_to_use = self._current_model_names.get(backend_id)
-            if not model_to_use:  # Fallback if somehow a backend_id has no model set
+            if not model_to_use:
                 if backend_id == DEFAULT_CHAT_BACKEND_ID:
                     model_to_use = DEFAULT_GEMINI_CHAT_MODEL
                 elif backend_id == OLLAMA_CHAT_BACKEND_ID:
@@ -321,11 +327,10 @@ class ChatManager(QObject):
                 elif backend_id == GENERATOR_BACKEND_ID:
                     model_to_use = DEFAULT_OLLAMA_MODEL
                 else:
-                    model_to_use = "default_model_placeholder"  # Should not happen
+                    model_to_use = "default_model_placeholder"
                 self._current_model_names[backend_id] = model_to_use
 
             personality_to_use = self._current_chat_personality_prompts.get(backend_id)
-            # Ensure generator has its specific prompt if none is set
             if backend_id == GENERATOR_BACKEND_ID and personality_to_use is None:
                 personality_to_use = CODER_AI_SYSTEM_PROMPT
                 self._current_chat_personality_prompts[GENERATOR_BACKEND_ID] = personality_to_use
@@ -339,7 +344,6 @@ class ChatManager(QObject):
                                                         personality_to_use)
 
     def get_all_available_chat_models_with_details(self) -> List[Dict[str, Any]]:
-        # ... (remains the same)
         all_models_details = []
         for provider_detail in USER_SELECTABLE_CHAT_BACKEND_DETAILS:
             backend_id, provider_name = provider_detail["id"], provider_detail["name"]
@@ -354,9 +358,8 @@ class ChatManager(QObject):
         return all_models_details
 
     def get_all_available_specialized_models_with_details(self) -> List[Dict[str, Any]]:
-        # ... (remains the same)
         all_models_details = []
-        try:  # Assuming GENERATOR_BACKEND_ID is the only specialized one for now
+        try:
             for model_name_from_adapter in self.get_models_for_backend(GENERATOR_BACKEND_ID):
                 all_models_details.append({"display_name": f"Ollama (Specialized): {model_name_from_adapter}",
                                            "backend_id": GENERATOR_BACKEND_ID, "model_name": model_name_from_adapter})
@@ -365,48 +368,40 @@ class ChatManager(QObject):
         return all_models_details
 
     def get_available_backend_details(self) -> List[Dict[str, str]]:
-        # ... (remains the same)
         return [detail for detail in USER_SELECTABLE_CHAT_BACKEND_DETAILS if
                 detail['id'] in self._backend_adapters_dict]
 
     def get_models_for_backend(self, backend_id: str) -> List[str]:
-        # ... (remains the same)
         if backend_id not in self._backend_adapters_dict: return self._available_models_per_backend.get(backend_id, [])
         if self._backend_coordinator:
             try:
                 models = self._backend_coordinator.get_available_models_for_backend(backend_id)
-                self._available_models_per_backend[backend_id] = models[:]  # Cache it
+                self._available_models_per_backend[backend_id] = models[:]
                 return models
             except Exception as e:
                 logger.exception(f"Error fetching models for backend '{backend_id}' via BackendCoordinator:")
-        return self._available_models_per_backend.get(backend_id, [])  # Return cached if error
+        return self._available_models_per_backend.get(backend_id, [])
 
     def get_model_for_backend(self, backend_id: str) -> Optional[str]:
-        # ... (remains the same)
         return self._current_model_names.get(backend_id)
 
     def get_current_active_chat_backend_id(self) -> str:
-        # ... (remains the same)
         return self._current_active_chat_backend_id
 
     @pyqtSlot(dict)
     def _handle_pcm_project_list_updated(self, projects_dict: Dict[str, str]):
-        # ... (remains the same)
         self.project_inventory_updated.emit(projects_dict)
         if self._project_context_manager:
             current_active_id_in_pcm = self._project_context_manager.get_active_project_id()
             if current_active_id_in_pcm not in projects_dict and current_active_id_in_pcm != constants.GLOBAL_COLLECTION_ID:
-                # If active project was deleted, switch to Global
                 self.set_current_project(constants.GLOBAL_COLLECTION_ID)
             elif not projects_dict and current_active_id_in_pcm != constants.GLOBAL_COLLECTION_ID:
-                # If all projects deleted, switch to Global
                 self.set_current_project(constants.GLOBAL_COLLECTION_ID)
 
     @pyqtSlot(str)
     def _handle_pcm_active_project_changed(self, new_active_project_id: str):
-        # ... (remains the same)
         active_history = self.get_project_history(new_active_project_id)
-        self.history_changed.emit(active_history[:])  # Send a copy
+        self.history_changed.emit(active_history[:])
         self.current_project_changed.emit(new_active_project_id)
         self._update_rag_initialized_state(emit_status=True, project_id=new_active_project_id)
         self._trigger_save_last_session_state()
@@ -414,7 +409,6 @@ class ChatManager(QObject):
     @pyqtSlot(str, str, dict, str)
     def _handle_sfm_session_loaded(self, model_name: str, personality: Optional[str], proj_ctx_data: Dict[str, Any],
                                    active_pid_from_session: str):
-        # ... (remains the same)
         if not (self._project_context_manager and self._backend_coordinator): return
         session_extra_data = proj_ctx_data.pop("session_extra_data_on_load", None)
         active_backend_id_from_session, temperature_from_session, generator_model_from_session = DEFAULT_CHAT_BACKEND_ID, None, None
@@ -433,7 +427,7 @@ class ChatManager(QObject):
                 self._current_active_chat_backend_id] = model_name or self._current_model_names.get(
                 self._current_active_chat_backend_id, "")
             self._current_chat_personality_prompts[self._current_active_chat_backend_id] = personality
-        else:  # Default to the app's default chat backend if loaded one is invalid
+        else:
             self._current_model_names[DEFAULT_CHAT_BACKEND_ID] = model_name or DEFAULT_GEMINI_CHAT_MODEL
             self._current_chat_personality_prompts[DEFAULT_CHAT_BACKEND_ID] = personality
             self._current_active_chat_backend_id = DEFAULT_CHAT_BACKEND_ID
@@ -441,120 +435,44 @@ class ChatManager(QObject):
         if generator_model_from_session and GENERATOR_BACKEND_ID in self._current_model_names:
             self._current_model_names[GENERATOR_BACKEND_ID] = generator_model_from_session
 
-        # Ensure Generator AI always has its system prompt if none was loaded
         if GENERATOR_BACKEND_ID in self._current_chat_personality_prompts and \
                 self._current_chat_personality_prompts.get(GENERATOR_BACKEND_ID) is None:
             self._current_chat_personality_prompts[GENERATOR_BACKEND_ID] = CODER_AI_SYSTEM_PROMPT
 
         self._project_context_manager.load_state(proj_ctx_data)
-        self._configure_all_initial_backends()  # Reconfigure with loaded settings
-        self.set_current_project(active_pid_from_session)  # This will trigger history load etc.
+        self._configure_all_initial_backends()
+        self.set_current_project(active_pid_from_session)
         self._update_rag_initialized_state(emit_status=True, project_id=active_pid_from_session)
         self.update_status_based_on_state()
 
     @pyqtSlot()
     def _handle_sfm_active_history_cleared(self):
-        # ... (remains the same)
         if self._project_context_manager:
             active_project_id = self._project_context_manager.get_active_project_id()
             if active_project_id and (history := self._project_context_manager.get_project_history(active_project_id)):
                 history.clear()
-                self.history_changed.emit([])  # Emit empty list
+                self.history_changed.emit([])
 
     @pyqtSlot(str, str, dict, dict)
     def _handle_sfm_request_state_save(self, model_name: str, personality: Optional[str],
                                        all_project_data: Dict[str, Any], session_extra_data: Dict[str, Any]):
-        # ... (remains the same)
         if self._session_flow_manager:
-            # Ensure generator model name is in session_extra_data before saving
             session_extra_data["generator_model_name"] = self._current_model_names.get(GENERATOR_BACKEND_ID)
             self._session_flow_manager.save_current_session_to_last_state(model_name, personality, session_extra_data)
 
-    @pyqtSlot(str)
-    def _handle_backend_stream_started(self, request_id: str):
-        # ... (remains the same)
-        self.stream_started.emit(request_id)
+    @pyqtSlot(str, str) # From CIH
+    def _handle_cih_stream_chunk(self, request_id: str, chunk: str):
+        # This is now specific to normal chat streams from CIH
+        self.stream_chunk_received.emit(chunk) # Pass through to UI
 
-    @pyqtSlot(str, str)
-    def _handle_backend_chunk_received(self, request_id: str, chunk: str):
-        # ... (remains the same, including MC check)
-        if self._modification_coordinator and self._modification_coordinator.is_active():
-            # Determine if this chunk is for the MC
-            purpose = None
-            if self._backend_coordinator:
-                task_key = None
-                for tk in self._backend_coordinator._active_backend_tasks.keys():  # Iterate over keys directly
-                    if tk[1] == request_id:  # request_id is the second element of the tuple key
-                        task_key = tk
-                        break
-                if task_key:
-                    task = self._backend_coordinator._active_backend_tasks.get(task_key)
-                    # Accessing coroutine locals is fragile; consider a more robust way if possible
-                    if task and hasattr(task, 'get_coro') and hasattr(task.get_coro(),
-                                                                      'cr_frame') and task.get_coro().cr_frame:
-                        f_locals = task.get_coro().cr_frame.f_locals
-                        if 'request_metadata' in f_locals and isinstance(f_locals['request_metadata'], dict):
-                            purpose = f_locals['request_metadata'].get("purpose")
-
-            if purpose and purpose.startswith("mc_request_code_generation_"):
-                # This chunk is part of code generation for MC, don't send to main chat UI
-                return
-
-        self.stream_chunk_received.emit(chunk)
-
-    @pyqtSlot(str, ChatMessage, dict)
-    def _handle_backend_response_completed(self, request_id: str, completed_message: ChatMessage,
-                                           usage_stats_with_metadata: dict):
-        # ... (remains largely the same, including MC and PSC checks)
-        purpose = usage_stats_with_metadata.get("purpose")
-
-        # Check if it's a code generation response for ModificationCoordinator
-        if purpose and isinstance(purpose, str) and purpose.startswith("mc_request_code_generation_"):
-            # This response is for the Coder LLM within MC. MC handles it via its direct connection
-            # to BackendCoordinator's response_completed signal.
-            # We should NOT process it here for the main chat UI.
-            return
-
-            # Check if it's a planner response for ModificationCoordinator
-        backend_id_for_mc = usage_stats_with_metadata.get("backend_id_for_mc")
-        is_mc_planner_response = purpose and isinstance(purpose, str) and purpose.startswith(
-            "mc_request_") and backend_id_for_mc == PLANNER_BACKEND_ID
-
-        if self._modification_coordinator and self._modification_coordinator.is_active() and is_mc_planner_response:
-            # This response is for the Planner LLM within MC.
-            if self._modification_coordinator.is_awaiting_llm_response() and \
-                    self._modification_coordinator._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS:  # Check phase
-                self._modification_coordinator.process_llm_response(backend_id_for_mc, completed_message)
-                return  # MC has handled it
-            else:
-                # It's an MC planner response but MC isn't in the right state, or not awaiting. Log and ignore for UI.
-                logger.warning(
-                    f"CM: Received MC planner response (ReqID: {request_id}) but MC not in expected state. Ignoring for UI.")
-                return
-
-        # Check if it's for ProjectSummaryCoordinator
-        if purpose and isinstance(purpose, str) and purpose.startswith(
-                "psc_"):  # psc_technical_summary or psc_friendly_summary
-            # This response is for PSC. PSC handles it via its direct connection.
-            return
-
-        # Handle code summary responses (from CodeSummaryService, which uses PLANNER_BACKEND_ID)
-        if purpose == "code_summary" and (
-                original_target_filename := usage_stats_with_metadata.get("original_target_filename")):
-            self.status_update.emit(f"Ava's summary for '{original_target_filename}' is ready!", "#98c379", True, 3000)
-            summary_msg_text = f"✨ **Ava's Summary for {original_target_filename}:** ✨\n\n{completed_message.text}"
-            summary_chat_message = ChatMessage(role=SYSTEM_ROLE, parts=[summary_msg_text],
-                                               metadata={"is_ava_summary": True,
-                                                         "target_file": original_target_filename, "is_internal": False})
-            if self._project_context_manager: self._project_context_manager.add_message_to_active_project(
-                summary_chat_message); self.new_message_added.emit(
-                summary_chat_message); self._trigger_save_last_session_state()
-            return
-
-        # Standard chat response handling
-        message_updated_in_model = False
-        if self._project_context_manager and (
-                active_history := self._project_context_manager.get_active_conversation_history()):
+    @pyqtSlot(str, ChatMessage, dict) # From CIH
+    def _handle_cih_response_completed(self, request_id: str, completed_message: ChatMessage,
+                                       usage_stats_with_metadata: dict):
+        # This is now specific to normal chat responses from CIH
+        logger.info(f"CM: Handling CIH response completed for ReqID: {request_id}")
+        if self._project_context_manager:
+            active_history = self._project_context_manager.get_active_conversation_history()
+            message_updated_in_model = False
             for msg_in_history in reversed(active_history):
                 if msg_in_history.id == request_id and msg_in_history.role == MODEL_ROLE:
                     msg_in_history.parts = completed_message.parts
@@ -562,108 +480,70 @@ class ChatManager(QObject):
                         if msg_in_history.metadata is None: msg_in_history.metadata = {}
                         msg_in_history.metadata.update(completed_message.metadata)
                     msg_in_history.loading_state = MessageLoadingState.COMPLETED
-                    self.new_message_added.emit(msg_in_history)  # Emit to update UI
+                    self.new_message_added.emit(msg_in_history) # Update UI for existing placeholder
                     message_updated_in_model = True
                     break
-        if not message_updated_in_model and self._project_context_manager:
-            if completed_message.metadata is None: completed_message.metadata = {}
-            completed_message.metadata["request_id"] = request_id  # Ensure request_id is in metadata
-            completed_message.loading_state = MessageLoadingState.COMPLETED
-            self._project_context_manager.add_message_to_active_project(completed_message)
-            self.new_message_added.emit(completed_message)
+            if not message_updated_in_model: # Should not happen if placeholder was added
+                logger.error(f"CM: Placeholder for ReqID {request_id} not found in history for CIH completion.")
+                # Add it anew if truly missing, though this indicates a flow issue
+                if completed_message.metadata is None: completed_message.metadata = {}
+                completed_message.metadata["request_id"] = request_id
+                completed_message.loading_state = MessageLoadingState.COMPLETED
+                self._project_context_manager.add_message_to_active_project(completed_message)
+                self.new_message_added.emit(completed_message)
 
-        if self._project_context_manager: self._trigger_save_last_session_state()
-        self.stream_finished.emit()
-        prompt_tokens, completion_tokens = usage_stats_with_metadata.get(
-            "prompt_tokens"), usage_stats_with_metadata.get("completion_tokens")
 
-        # Determine correct backend_id for token calculation based on metadata or current active
-        backend_id_for_tokens = backend_id_for_mc if backend_id_for_mc else (
-            GENERATOR_BACKEND_ID if "technical_summary" in (purpose or "") else (  # For PSC's tech summary
-                DEFAULT_CHAT_BACKEND_ID if "friendly_summary" in (purpose or "") else  # For PSC's friendly summary
-                self._current_active_chat_backend_id  # For normal chat
-            ))
+            self._trigger_save_last_session_state()
+        self.stream_finished.emit() # Signal UI that this stream is done
+
+        prompt_tokens = usage_stats_with_metadata.get("prompt_tokens")
+        completion_tokens = usage_stats_with_metadata.get("completion_tokens")
+        backend_id_for_tokens = self._current_active_chat_backend_id # CIH only handles active chat backend
+
         if prompt_tokens is not None and completion_tokens is not None and self._model_info_service:
             model_name_for_token_calc = self._current_model_names.get(backend_id_for_tokens, "")
             model_max_context = self._model_info_service.get_max_tokens(model_name_for_token_calc)
             self.token_usage_updated.emit(backend_id_for_tokens, prompt_tokens, completion_tokens, model_max_context)
 
-    @pyqtSlot(str, str)
-    def _handle_backend_response_error(self, request_id: str, error_message_str: str):
-        # ... (remains largely the same, including MC and PSC checks)
-        # Check if this error is related to ModificationCoordinator's Coder LLM
-        purpose = None
-        if self._backend_coordinator:
-            task_key = None
-            for tk in self._backend_coordinator._active_backend_tasks.keys():
-                if tk[1] == request_id: task_key = tk; break
-            if task_key:
-                task = self._backend_coordinator._active_backend_tasks.get(task_key)
-                if task and hasattr(task, 'get_coro') and hasattr(task.get_coro(),
-                                                                  'cr_frame') and task.get_coro().cr_frame:
-                    f_locals = task.get_coro().cr_frame.f_locals
-                    if 'request_metadata' in f_locals and isinstance(f_locals['request_metadata'], dict):
-                        purpose = f_locals['request_metadata'].get("purpose")
 
-        if purpose and isinstance(purpose, str) and purpose.startswith("mc_request_code_generation_"):
-            # This error is for the Coder LLM within MC. MC handles it.
-            return
-
-        # Check if it's for ProjectSummaryCoordinator
-        is_psc_related_error = False
-        if self._project_summary_coordinator and (
-                (hasattr(self._project_summary_coordinator,
-                         '_current_request_id_tech_summary') and self._project_summary_coordinator._current_request_id_tech_summary == request_id) or
-                (hasattr(self._project_summary_coordinator,
-                         '_current_request_id_friendly_summary') and self._project_summary_coordinator._current_request_id_friendly_summary == request_id)
-        ): is_psc_related_error = True
-        if is_psc_related_error: self.stream_finished.emit(); return  # PSC handles its errors
-
-        # Check if it's a planner error for ModificationCoordinator
-        if self._modification_coordinator and self._modification_coordinator.is_active() and \
-                self._modification_coordinator._current_phase == ModPhase.AWAITING_PLAN_AND_ALL_CODER_INSTRUCTIONS and \
-                request_id.startswith("mc_"):  # Check if request_id matches MC's pattern for planner
-            backend_id_for_mc_error = PLANNER_BACKEND_ID  # Assume planner if in this phase
-            if hasattr(self._modification_coordinator, 'process_llm_error'):  # Ensure method exists
-                self._modification_coordinator.process_llm_error(backend_id_for_mc_error, error_message_str)
-            self.stream_finished.emit()
-            return
-
-        # Standard chat error handling
-        message_updated_in_model = False
-        if self._project_context_manager and (
-                active_history := self._project_context_manager.get_active_conversation_history()):
+    @pyqtSlot(str, str) # From CIH
+    def _handle_cih_response_error(self, request_id: str, error_message_str: str):
+        # This is now specific to normal chat errors from CIH
+        logger.error(f"CM: Handling CIH response error for ReqID: {request_id}. Error: {error_message_str}")
+        if self._project_context_manager:
+            active_history = self._project_context_manager.get_active_conversation_history()
+            message_updated_in_model = False
             for msg_in_history in reversed(active_history):
                 if msg_in_history.id == request_id and msg_in_history.role == MODEL_ROLE:
-                    msg_in_history.role = ERROR_ROLE  # Change role to ERROR
-                    msg_in_history.parts = [f"Backend Error (Request ID: {request_id[:8]}...): {error_message_str}"]
-                    msg_in_history.loading_state = MessageLoadingState.COMPLETED  # Or .ERROR if you have specific UI for it
-                    self.new_message_added.emit(msg_in_history)  # Emit to update UI
+                    msg_in_history.role = ERROR_ROLE
+                    msg_in_history.parts = [f"Chat Error (ReqID: {request_id[:8]}...): {error_message_str}"]
+                    msg_in_history.loading_state = MessageLoadingState.COMPLETED
+                    self.new_message_added.emit(msg_in_history)
                     message_updated_in_model = True
                     break
-        if not message_updated_in_model and self._project_context_manager:
-            err_obj = ChatMessage(id=request_id, role=ERROR_ROLE,
-                                  parts=[f"Backend Error (Request ID: {request_id[:8]}...): {error_message_str}"],
-                                  loading_state=MessageLoadingState.COMPLETED)
-            self._project_context_manager.add_message_to_active_project(err_obj)
-            self.new_message_added.emit(err_obj)
+            if not message_updated_in_model:
+                logger.error(f"CM: Placeholder for ReqID {request_id} not found in history for CIH error.")
+                err_obj = ChatMessage(id=request_id, role=ERROR_ROLE,
+                                      parts=[f"Chat Error (ReqID: {request_id[:8]}...): {error_message_str}"],
+                                      loading_state=MessageLoadingState.COMPLETED)
+                self._project_context_manager.add_message_to_active_project(err_obj)
+                self.new_message_added.emit(err_obj)
 
-        if self._project_context_manager: self._trigger_save_last_session_state()
+            self._trigger_save_last_session_state()
         self.stream_finished.emit()
-        self.error_occurred.emit(f"Backend Error: {error_message_str}", False)
+        self.error_occurred.emit(f"Chat Error: {error_message_str}", False)
+
 
     @pyqtSlot(bool)
     def _handle_backend_busy_changed(self, backend_is_busy: bool):
-        # ... (remains the same)
         self._update_overall_busy_state()
 
     @pyqtSlot(str, str, bool, list)
     def _handle_backend_configuration_changed(self, backend_id: str, model_name: str, is_configured: bool,
                                               available_models: list):
-        # ... (remains the same)
         self._chat_backend_configured_successfully[backend_id] = is_configured
         self._available_models_per_backend[backend_id] = available_models[:]
-        self._current_model_names[backend_id] = model_name  # Update current model name cache
+        self._current_model_names[backend_id] = model_name
         if not is_configured and self._backend_coordinator:
             err = self._backend_coordinator.get_last_error_for_backend(backend_id) or f"{backend_id} config error."
             self.error_occurred.emit(f"Config Error ({backend_id} - {model_name}): {err}", False)
@@ -671,9 +551,9 @@ class ChatManager(QObject):
                                                        self._available_models_per_backend.get(backend_id, []))
         self.backend_config_state_changed.emit(backend_id, model_name, is_configured,
                                                bool(self._current_chat_personality_prompts.get(backend_id)))
-        if backend_id == self._current_active_chat_backend_id:  # Only update status if it's the active chat backend
+        if backend_id == self._current_active_chat_backend_id:
             self.update_status_based_on_state()
-        elif backend_id in [PLANNER_BACKEND_ID, GENERATOR_BACKEND_ID]:  # Or one of the specialized backends
+        elif backend_id in [PLANNER_BACKEND_ID, GENERATOR_BACKEND_ID]:
             d_name = {PLANNER_BACKEND_ID: "Planner", GENERATOR_BACKEND_ID: "Specialized"}.get(backend_id, backend_id)
             status_msg = f"{d_name} ({backend_id}) OK with {model_name}." if is_configured else f"{d_name} ({backend_id}) not configured ({model_name})."
             self.status_update.emit(status_msg, "#98c379" if is_configured else "#e06c75", True,
@@ -682,7 +562,6 @@ class ChatManager(QObject):
 
     @pyqtSlot(bool, str)
     def _handle_upload_started(self, is_global: bool, item_description: str):
-        # ... (remains the same)
         active_project_name_str = (
                 self._project_context_manager.get_active_project_name() or "Current") if self._project_context_manager else "N/A"
         context_name = constants.GLOBAL_CONTEXT_DISPLAY_NAME if is_global else active_project_name_str
@@ -691,18 +570,16 @@ class ChatManager(QObject):
 
     @pyqtSlot(ChatMessage)
     def _handle_upload_summary(self, summary_message: ChatMessage):
-        # ... (remains the same)
         if not self._project_context_manager: return
         self._project_context_manager.add_message_to_active_project(summary_message)
         self.new_message_added.emit(summary_message)
         s_cid = summary_message.metadata.get("collection_id") if summary_message.metadata else None
         self._update_rag_initialized_state(emit_status=True, project_id=s_cid)
-        self.update_status_based_on_state()  # Update overall status after RAG state change
+        self.update_status_based_on_state()
         self._trigger_save_last_session_state()
 
     @pyqtSlot(str)
     def _handle_upload_error(self, error_message_str: str):
-        # ... (remains the same)
         if not self._project_context_manager: return
         err_obj = ChatMessage(role=ERROR_ROLE, parts=[f"Upload System Error: {error_message_str}"])
         self._project_context_manager.add_message_to_active_project(err_obj)
@@ -712,63 +589,69 @@ class ChatManager(QObject):
 
     @pyqtSlot(bool)
     def _handle_upload_busy_changed(self, upload_is_busy: bool):
-        # ... (remains the same)
         self._update_overall_busy_state()
 
     @pyqtSlot(list)
     def _handle_uih_normal_chat_request(self, new_user_message_list: List[ChatMessage]):
-        # ... (remains the same)
-        if not (self._backend_coordinator and self._project_context_manager): self.error_occurred.emit(
-            "Cannot send chat: Critical components missing.", True); return
-        if not new_user_message_list or not isinstance(new_user_message_list[0], ChatMessage): return
-        user_message_for_ui = new_user_message_list[0]
+        if not (self._chat_interaction_handler and self._project_context_manager):
+            self.error_occurred.emit("Cannot send chat: Critical components (CIH or PCM) missing.", True)
+            return
+        if not new_user_message_list or not isinstance(new_user_message_list[0], ChatMessage):
+            logger.error("CM: Invalid user message list from UIH for normal chat.")
+            return
+
+        user_message_for_ui = new_user_message_list[0] # This message comes from UIH with RAG context already embedded
         self._project_context_manager.add_message_to_active_project(user_message_for_ui)
         self.new_message_added.emit(user_message_for_ui)
         self._trigger_save_last_session_state()
-        QApplication.processEvents()  # Ensure UI updates before potentially long LLM call
-        ai_request_id = str(uuid.uuid4())
-        ai_placeholder_message = ChatMessage(id=ai_request_id, role=MODEL_ROLE, parts=[""],
-                                             loading_state=MessageLoadingState.LOADING)
-        self._project_context_manager.add_message_to_active_project(ai_placeholder_message)
-        self.new_message_added.emit(ai_placeholder_message)  # Send placeholder to UI
-        full_history_for_backend = self._project_context_manager.get_active_conversation_history()
-        if not full_history_for_backend: self.error_occurred.emit("Internal error preparing chat.", True); return
-        self._backend_coordinator.request_response_stream(
-            target_backend_id=self._current_active_chat_backend_id, request_id=ai_request_id,
-            history_to_send=full_history_for_backend[:-1],  # Exclude the placeholder itself
-            is_modification_response_expected=False,
-            options={"temperature": self._current_chat_temperature},
-            request_metadata={"original_user_message_id": user_message_for_ui.id}
+        QApplication.processEvents()
+
+        # History for backend should be everything BEFORE the current user_message_for_ui
+        full_history_for_backend_ref = self._project_context_manager.get_active_conversation_history()
+        if not full_history_for_backend_ref:
+             self.error_occurred.emit("Internal error preparing chat history.", True)
+             return
+        history_to_send_to_cih = [msg for msg in full_history_for_backend_ref if msg.id != user_message_for_ui.id]
+        history_to_send_to_cih.append(user_message_for_ui) # Add the current user message (with RAG) as the last item
+
+        ai_placeholder_message = self._chat_interaction_handler.process_chat_request(
+            history_to_send=history_to_send_to_cih, # Send history including current user query
+            target_backend_id=self._current_active_chat_backend_id,
+            temperature=self._current_chat_temperature,
+            original_user_message_id=user_message_for_ui.id
         )
 
-    # --- MODIFIED: Renamed slot for bootstrap ---
+        if ai_placeholder_message:
+            self._project_context_manager.add_message_to_active_project(ai_placeholder_message)
+            self.new_message_added.emit(ai_placeholder_message)
+        else:
+            logger.error("CM: ChatInteractionHandler did not return a placeholder message for normal chat.")
+
+
     @pyqtSlot(str, list, str, str)
     def _handle_uih_bootstrap_start_request(self, original_query_text: str, image_data_list: List[Dict[str, Any]],
                                             context_for_mc: str, focus_prefix_for_mc: str):
-        if not (self._modification_coordinator and self._project_context_manager):
-            self.error_occurred.emit("Bootstrap feature unavailable or PCM missing.", True)
+        if not self._modification_sequence_manager:
+            self.error_occurred.emit("Bootstrap feature unavailable (MSM missing).", True)
+            return
+        if self._modification_sequence_manager.is_active():
+            logger.warning("CM: Bootstrap request received while MSM is already active. Ignoring.")
+            self.status_update.emit("System is busy with another multi-file operation. Please wait.", "#e5c07b", True, 4000)
             return
 
-        # Display user's bootstrap command in chat
-        user_chat_message_for_ui = ChatMessage(role=USER_ROLE, parts=[original_query_text] + (image_data_list or []))
-        self._project_context_manager.add_message_to_active_project(user_chat_message_for_ui)
-        self.new_message_added.emit(user_chat_message_for_ui)
-        self._trigger_save_last_session_state()
-        QApplication.processEvents()  # Ensure UI updates
+        if self._project_context_manager:
+            user_chat_message_for_ui = ChatMessage(role=USER_ROLE, parts=[original_query_text] + (image_data_list or []))
+            self._project_context_manager.add_message_to_active_project(user_chat_message_for_ui)
+            self.new_message_added.emit(user_chat_message_for_ui)
+            self._trigger_save_last_session_state()
+            QApplication.processEvents()
 
-        # Removed direct activation of self._modification_handler_instance
-        # MC will handle activation.
-
-        # Call the specific bootstrap method on MC
-        self._modification_coordinator.start_sequence_for_bootstrap(
+        self._modification_sequence_manager.start_bootstrap_sequence(
             query=original_query_text,
             context_from_rag=context_for_mc,
             focus_prefix=focus_prefix_for_mc
         )
 
-    # --- END MODIFIED ---
-
-    # --- NEW: Slot for handling "Modify Existing" requests ---
     @pyqtSlot(str, list, list, str, str)
     def _handle_uih_modification_existing_start_request(self,
                                                         original_query_text: str,
@@ -776,41 +659,37 @@ class ChatManager(QObject):
                                                         identified_target_files: List[str],
                                                         context_for_mc: str,
                                                         focus_prefix_for_mc: str):
-        if not (self._modification_coordinator and self._project_context_manager):
-            self.error_occurred.emit("Modification feature unavailable or PCM missing.", True)
+        if not self._modification_sequence_manager:
+            self.error_occurred.emit("Modification feature unavailable (MSM missing).", True)
+            return
+        if self._modification_sequence_manager.is_active():
+            logger.warning("CM: Modification (existing) request received while MSM is already active. Ignoring.")
+            self.status_update.emit("System is busy with another multi-file operation. Please wait.", "#e5c07b", True, 4000)
             return
 
-        # Display user's modification command in chat
-        user_chat_message_for_ui = ChatMessage(role=USER_ROLE, parts=[original_query_text] + (image_data_list or []))
-        self._project_context_manager.add_message_to_active_project(user_chat_message_for_ui)
-        self.new_message_added.emit(user_chat_message_for_ui)
-        self._trigger_save_last_session_state()
-        QApplication.processEvents()  # Ensure UI updates
+        if self._project_context_manager:
+            user_chat_message_for_ui = ChatMessage(role=USER_ROLE, parts=[original_query_text] + (image_data_list or []))
+            self._project_context_manager.add_message_to_active_project(user_chat_message_for_ui)
+            self.new_message_added.emit(user_chat_message_for_ui)
+            self._trigger_save_last_session_state()
+            QApplication.processEvents()
 
-        # Removed direct activation of self._modification_handler_instance
-        # MC will handle activation.
-
-        # Call the new method on MC for modifying existing files
-        self._modification_coordinator.start_sequence_for_modification(
+        self._modification_sequence_manager.start_modification_sequence(
             query=original_query_text,
             identified_target_files=identified_target_files,
             context_from_rag=context_for_mc,
             focus_prefix=focus_prefix_for_mc
         )
 
-    # --- END NEW ---
-
     @pyqtSlot(str, str)
     def _handle_uih_mod_user_input(self, user_command: str, action_type: str):
-        # ... (remains the same)
-        if self._modification_coordinator:
-            self._modification_coordinator.process_user_input(user_command)
+        if self._modification_sequence_manager and self._modification_sequence_manager.is_active():
+            self._modification_sequence_manager.process_user_input(user_command)
         else:
-            self.error_occurred.emit("Modification feature unavailable.", False)
+            self.error_occurred.emit("Modification feature unavailable or not active.", False)
 
     @pyqtSlot(str)
     def _handle_uih_processing_error(self, error_message: str):
-        # ... (remains the same)
         self.error_occurred.emit(f"Input Processing Error: {error_message}", False)
         if self._project_context_manager:
             err_obj = ChatMessage(role=ERROR_ROLE, parts=[f"Input Error: {error_message}"])
@@ -819,55 +698,13 @@ class ChatManager(QObject):
 
     @pyqtSlot(ChatMessage)
     def _handle_user_command_for_display_only(self, user_message: ChatMessage):
-        # ... (remains the same)
         if not self._project_context_manager: return
         self._project_context_manager.add_message_to_active_project(user_message)
         self.new_message_added.emit(user_message)
         self._trigger_save_last_session_state()
 
-    @pyqtSlot(str, list)
-    def _handle_mc_request_llm_call(self, target_backend_id: str, history_to_send: List[ChatMessage]):
-        # ... (remains the same)
-        if self._backend_coordinator:
-            mc_options = {}  # Default options
-            if target_backend_id == GENERATOR_BACKEND_ID:
-                mc_options = {"temperature": 0.2}  # Coder specific temp
-            elif target_backend_id == PLANNER_BACKEND_ID:
-                mc_options = {"temperature": 0.5}  # Planner specific temp
-
-            mc_internal_request_id = f"mc_planner_initial_{str(uuid.uuid4())[:8]}"  # Generic enough for planner or coder initial
-            request_metadata_for_mc = {
-                "purpose": f"mc_request_{target_backend_id}",  # Helps identify if it's planner or coder
-                "mc_internal_id": mc_internal_request_id,
-                "backend_id_for_mc": target_backend_id  # Explicitly pass the backend ID
-            }
-            self._backend_coordinator.request_response_stream(
-                target_backend_id=target_backend_id, request_id=mc_internal_request_id,
-                history_to_send=history_to_send, is_modification_response_expected=True,
-                options=mc_options, request_metadata=request_metadata_for_mc
-            )
-        elif self._modification_coordinator:  # Should not happen if BC is missing
-            self._modification_coordinator.process_llm_error(target_backend_id, "BackendCoordinator unavailable.")
-
-    @pyqtSlot(str, str, str)
-    def _handle_code_generated_and_summary_needed(self, generated_code: str, coder_instructions: str,
-                                                  target_filename: str):
-        # ... (remains the same)
-        if not (self._code_summary_service and self._backend_coordinator): self.error_occurred.emit(
-            f"Internal error: Services unavailable for summary of '{target_filename}'.", True); return
-        self.status_update.emit(f"Ava is preparing summary for '{target_filename}'...", "#e5c07b", True, 4000)
-        if not self._code_summary_service.request_code_summary(self._backend_coordinator, target_filename,
-                                                               coder_instructions, generated_code):
-            if self._project_context_manager:
-                sys_err_msg = ChatMessage(role=ERROR_ROLE,
-                                          parts=[f"[System: Error initiating summary for '{target_filename}'.]"])
-                self._project_context_manager.add_message_to_active_project(sys_err_msg)
-                self.new_message_added.emit(sys_err_msg)
-            self.update_status_based_on_state()
-
     @pyqtSlot(str, str)
-    def _handle_mc_file_ready(self, filename: str, content: str):
-        # ... (remains the same)
+    def _handle_msm_file_ready(self, filename: str, content: str):
         self.code_file_updated.emit(filename, content)
         if self._project_context_manager:
             sys_msg = ChatMessage(role=SYSTEM_ROLE, parts=[f"[System: File '{filename}' updated. See Code Viewer.]"],
@@ -876,40 +713,36 @@ class ChatManager(QObject):
             self.new_message_added.emit(sys_msg)
 
     @pyqtSlot(str, str, dict)
-    def _handle_mc_sequence_complete(self, reason: str, original_query_summary: str, generated_files_data: dict):
-        # ... (remains the same)
+    def _handle_msm_sequence_complete(self, reason: str, original_query_summary: str, generated_files_data: dict):
         if self._project_context_manager:
             strengthened_system_message_text = (
                 f"[System: Task '{original_query_summary}' (multi-file code modification) is now FULLY COMPLETED and CLOSED. Reason for completion: {reason}. All generated code is in the Code Viewer. IMPORTANT: The user is now expected to start a NEW, unrelated conversation or ask a new question. Ava, your role is to transition to a fresh, open-ended conversational state. Acknowledge completion if the user mentions it, then wait for their NEXT independent query. DO NOT re-describe, re-summarize, or offer to continue the '{original_query_summary}' task. Consider the previous task context as concluded.]")
             internal_sys_msg = ChatMessage(role=SYSTEM_ROLE, parts=[strengthened_system_message_text],
                                            metadata={"is_internal": True})
             self._project_context_manager.add_message_to_active_project(internal_sys_msg)
-
             priming_model_message_text = ""
             if reason == "completed_no_files_in_plan":
                 priming_model_message_text = f"Okay, it looks like no changes were actually needed for '{original_query_summary}'. What can I help you with now? ✨"
             elif reason == "completed_by_user_acceptance":
                 priming_model_message_text = f"Great! All changes for '{original_query_summary}' are accepted. What's next on your list? 🚀"
-            elif reason == "completed_no_files":  # This might be redundant with no_files_in_plan
+            elif reason == "completed_no_files":
                 priming_model_message_text = f"Okay, it looks like no changes were actually needed for '{original_query_summary}'. What can I help you with now? ✨"
             elif reason == "completed":
                 priming_model_message_text = f"Alright, all done with the '{original_query_summary}' task! What's next on your list? 🚀"
-            else:  # Error cases, cancellations
+            else:
                 priming_model_message_text = f"The task '{original_query_summary}' has finished ({reason}). What shall we do next?"
-
             if priming_model_message_text:
                 priming_model_msg = ChatMessage(role=MODEL_ROLE, parts=[priming_model_message_text])
                 self._project_context_manager.add_message_to_active_project(priming_model_msg)
                 self.new_message_added.emit(priming_model_msg)
             self._trigger_save_last_session_state()
 
-        self.update_status_based_on_state()  # Reflect that MC is no longer busy
-        if self._modification_handler_instance: self._modification_handler_instance.cancel_modification()
+        self.update_status_based_on_state()
 
         if reason in ["completed_by_user_acceptance", "completed"] and generated_files_data:
             successful_files_to_save = {
                 filename: data_tuple[0] for filename, data_tuple in generated_files_data.items()
-                if data_tuple and data_tuple[0] is not None and data_tuple[1] is None  # Content exists, no error
+                if data_tuple and data_tuple[0] is not None and data_tuple[1] is None
             }
             if successful_files_to_save:
                 logger.info(
@@ -918,12 +751,14 @@ class ChatManager(QObject):
             else:
                 logger.info(
                     "ChatManager: Modification sequence completed, but no successfully generated files to save.")
-        elif reason not in ["completed_by_user_acceptance", "completed"]:  # e.g., error or cancelled
+        elif reason not in ["completed_by_user_acceptance", "completed"]:
             logger.info(f"ChatManager: Modification sequence ended with reason '{reason}'. No files will be saved.")
 
+        logger.info("ChatManager: Modification sequence complete. Clearing chat focus paths.")
+        self.set_chat_focus([])
+
     @pyqtSlot(str)
-    def _handle_mc_error(self, error_message: str):
-        # ... (remains the same)
+    def _handle_msm_error(self, error_message: str):
         if self._project_context_manager:
             err_msg_obj = ChatMessage(role=ERROR_ROLE, parts=[f"Modification System Error: {error_message}"],
                                       metadata={"is_internal": False})
@@ -934,8 +769,7 @@ class ChatManager(QObject):
         self.update_status_based_on_state()
 
     @pyqtSlot(str)
-    def _handle_mc_status_update(self, message: str):
-        # ... (remains the same)
+    def _handle_msm_status_update(self, message: str):
         if self._project_context_manager:
             status_msg = ChatMessage(role=SYSTEM_ROLE, parts=[message], metadata={"is_internal": False})
             self._project_context_manager.add_message_to_active_project(status_msg)
@@ -943,7 +777,6 @@ class ChatManager(QObject):
 
     @pyqtSlot(str, str)
     def _handle_project_summary_generated(self, project_id: str, friendly_summary_text: str):
-        # ... (remains the same)
         if not self._project_context_manager: return
         project_name = self._project_context_manager.get_project_name(project_id) or project_id
         summary_chat_message = ChatMessage(role=MODEL_ROLE, parts=[
@@ -952,9 +785,9 @@ class ChatManager(QObject):
                                                      "is_internal": False})
         if (target_history := self._project_context_manager.get_project_history(project_id)) is not None:
             target_history.append(summary_chat_message)
-            if self._project_context_manager.get_active_project_id() == project_id:  # If summary is for active project
+            if self._project_context_manager.get_active_project_id() == project_id:
                 self.new_message_added.emit(summary_chat_message)
-            else:  # Summary for a non-active project, just notify
+            else:
                 self.status_update.emit(f"Project summary for project '{project_name}' is ready!", "#98c379", True,
                                         5000)
         self._trigger_save_last_session_state()
@@ -962,7 +795,6 @@ class ChatManager(QObject):
 
     @pyqtSlot(str, str)
     def _handle_project_summary_failed(self, project_id: str, error_message: str):
-        # ... (remains the same)
         if not self._project_context_manager: return
         project_name = self._project_context_manager.get_project_name(project_id) or project_id
         error_chat_message = ChatMessage(role=ERROR_ROLE, parts=[
@@ -978,19 +810,25 @@ class ChatManager(QObject):
         self.update_status_based_on_state()
 
     def _cancel_active_tasks(self):
-        # ... (remains the same)
-        if self._backend_coordinator: self._backend_coordinator.cancel_current_task()
-        if self._upload_coordinator: self._upload_coordinator.cancel_current_upload()
-        if self._modification_coordinator and self._modification_coordinator.is_active(): self._modification_coordinator.cancel_sequence(
-            reason="user_cancel_all")
+        # Cancel normal chat if CIH is handling it
+        if self._chat_interaction_handler:
+            self._chat_interaction_handler.cancel_current_request()
+        # Cancel modification sequence if MSM is handling it
+        if self._modification_sequence_manager and self._modification_sequence_manager.is_active():
+            self._modification_sequence_manager.cancel_sequence(reason="user_cancel_all_from_cm")
+        # Cancel uploads
+        if self._upload_coordinator:
+            self._upload_coordinator.cancel_current_upload()
+        # Cancel general backend tasks (e.g., project summary if not through CIH/MSM)
+        if self._backend_coordinator:
+            self._backend_coordinator.cancel_current_task()
+
 
     def cleanup(self):
-        # ... (remains the same)
         self._cancel_active_tasks()
         self._trigger_save_last_session_state()
 
     def _update_rag_initialized_state(self, emit_status: bool = True, project_id: Optional[str] = None):
-        # ... (remains the same)
         if not self._project_context_manager: return
         target_pid = project_id or (self._project_context_manager.get_active_project_id())
         new_init_state = self.is_rag_context_initialized(target_pid)
@@ -999,36 +837,29 @@ class ChatManager(QObject):
                 target_pid == self._project_context_manager.get_active_project_id() and self._rag_initialized != new_init_state): self.update_status_based_on_state()
 
     def is_rag_context_initialized(self, project_id: Optional[str]) -> bool:
-        # ... (remains the same)
         if not (self._vector_db_service and project_id): self._rag_available = False; return False
-        self._rag_available = True  # Assume available if service exists
+        self._rag_available = True
         return (self._vector_db_service.is_ready(project_id) and self._vector_db_service.get_collection_size(
             project_id) > 0)
 
     def get_project_history(self, project_id: str) -> List[ChatMessage]:
-        # ... (remains the same)
         return list(self._project_context_manager.get_project_history(
             project_id) or []) if self._project_context_manager else []
 
     def get_current_history(self) -> List[ChatMessage]:
-        # ... (remains the same)
         return list(
             self._project_context_manager.get_active_conversation_history() or []) if self._project_context_manager else []
 
     def get_current_project_id(self) -> Optional[str]:
-        # ... (remains the same)
         return self._project_context_manager.get_active_project_id() if self._project_context_manager else None
 
     def is_overall_busy(self) -> bool:
-        # ... (remains the same)
         return self._overall_busy
 
     def is_rag_available(self) -> bool:
-        # ... (remains the same)
         return self._rag_available
 
     def get_rag_contents(self, collection_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        # ... (remains the same)
         if not (self._project_context_manager and self._vector_db_service): return []
         target_id = collection_id or (self._project_context_manager.get_active_project_id())
         if not target_id or not self._vector_db_service.is_ready(target_id): return []
@@ -1039,7 +870,6 @@ class ChatManager(QObject):
             return []
 
     def get_current_focus_paths(self) -> Optional[List[str]]:
-        # ... (remains the same)
         return self._current_chat_focus_paths
 
     def get_project_context_manager(self) -> Optional[ProjectContextManager]:
@@ -1052,7 +882,13 @@ class ChatManager(QObject):
         return self._upload_coordinator
 
     def get_modification_coordinator(self) -> Optional[ModificationCoordinator]:
-        return self._modification_coordinator
+        return self._orchestrator.get_modification_coordinator()
+
+    def get_modification_sequence_manager(self) -> Optional[ModificationSequenceManager]:
+        return self._orchestrator.get_modification_sequence_manager()
+
+    def get_chat_interaction_handler(self) -> Optional[ChatInteractionHandler]:
+        return self._orchestrator.get_chat_interaction_handler()
 
     def get_session_flow_manager(self) -> Optional[SessionFlowManager]:
         return self._session_flow_manager
@@ -1060,13 +896,10 @@ class ChatManager(QObject):
     def get_project_summary_coordinator(self) -> Optional[ProjectSummaryCoordinator]:
         return self._project_summary_coordinator
 
-    # --- NEW: Getter for ChangeApplierService ---
     def get_change_applier_service(self) -> Optional[ChangeApplierService]:
         return self._change_applier_service
 
-    # --- END NEW ---
     def _trigger_save_last_session_state(self):
-        # ... (remains the same)
         if self._session_flow_manager:
             active_chat_backend_id = self._current_active_chat_backend_id
             session_extra_data = {
@@ -1077,19 +910,16 @@ class ChatManager(QObject):
             self._session_flow_manager.save_current_session_to_last_state(
                 self._current_model_names.get(active_chat_backend_id),
                 self._current_chat_personality_prompts.get(active_chat_backend_id),
-                {k: v for k, v in session_extra_data.items() if v is not None}  # Filter out None values
+                {k: v for k, v in session_extra_data.items() if v is not None}
             )
 
     def get_current_chat_model(self) -> str:
-        # ... (remains the same)
         return self._current_model_names.get(self._current_active_chat_backend_id, "Unknown Model")
 
     def get_current_chat_personality(self) -> Optional[str]:
-        # ... (remains the same)
         return self._current_chat_personality_prompts.get(self._current_active_chat_backend_id)
 
     def set_active_chat_backend(self, backend_id: str):
-        # ... (remains the same)
         if backend_id not in self._current_model_names and not any(
                 detail["id"] == backend_id for detail in
                 USER_SELECTABLE_CHAT_BACKEND_DETAILS): self.error_occurred.emit(
@@ -1107,7 +937,6 @@ class ChatManager(QObject):
             self._trigger_save_last_session_state()
 
     def set_model_for_backend(self, backend_id: str, model_name: str):
-        # ... (remains the same)
         if backend_id not in self._current_model_names: self.error_occurred.emit(
             f"Cannot set model for invalid backend: {backend_id}", False); return
         if not model_name: self.error_occurred.emit(f"Model name cannot be empty for backend: {backend_id}",
@@ -1118,18 +947,17 @@ class ChatManager(QObject):
         personality_to_use = self._current_chat_personality_prompts.get(backend_id)
         if backend_id == GENERATOR_BACKEND_ID and personality_to_use is None: personality_to_use = CODER_AI_SYSTEM_PROMPT;
         self._current_chat_personality_prompts[
-            GENERATOR_BACKEND_ID] = personality_to_use  # Ensure generator has its specific prompt
+            GENERATOR_BACKEND_ID] = personality_to_use
         if self._backend_coordinator: self._backend_coordinator.configure_backend(backend_id, api_key_to_use,
                                                                                   model_name, personality_to_use)
         if backend_id == self._current_active_chat_backend_id: self.update_status_based_on_state()
         self._trigger_save_last_session_state()
 
     def set_personality_for_backend(self, backend_id: str, prompt: Optional[str]):
-        # ... (remains the same)
         if backend_id not in self._current_chat_personality_prompts: self.error_occurred.emit(
             f"Cannot set personality for invalid backend: {backend_id}", False); return
         effective_prompt = prompt.strip() if prompt else None
-        if backend_id == GENERATOR_BACKEND_ID and not effective_prompt: effective_prompt = CODER_AI_SYSTEM_PROMPT  # Generator specific
+        if backend_id == GENERATOR_BACKEND_ID and not effective_prompt: effective_prompt = CODER_AI_SYSTEM_PROMPT
         self._current_chat_personality_prompts[backend_id] = effective_prompt
         api_key_to_use = get_gemini_api_key() if backend_id.startswith("gemini") else (
             get_openai_api_key() if backend_id.startswith("gpt") else None)
@@ -1142,12 +970,10 @@ class ChatManager(QObject):
         self._trigger_save_last_session_state()
 
     def set_current_project(self, project_id: str):
-        # ... (remains the same)
         if self._project_context_manager and not self._project_context_manager.set_active_project(
                 project_id): self.error_occurred.emit(f"Failed to set project '{project_id}'.", False)
 
     def create_project_collection(self, project_name: str):
-        # ... (remains the same)
         if self._project_context_manager:
             if not self._project_context_manager.create_project(project_name):
                 self.error_occurred.emit(f"Failed to create project '{project_name}'.", False)
@@ -1155,7 +981,6 @@ class ChatManager(QObject):
                 self.status_update.emit(f"Project '{project_name}' created.", "#98c379", True, 3000)
 
     def start_new_chat(self):
-        # ... (remains the same)
         if self._session_flow_manager:
             session_extra_data = {
                 "active_chat_backend_id": self._current_active_chat_backend_id,
@@ -1169,12 +994,10 @@ class ChatManager(QObject):
             )
 
     def load_chat_session(self, filepath: str):
-        # ... (remains the same)
         if self._session_flow_manager: self._session_flow_manager.load_named_session(filepath,
                                                                                      self._current_active_chat_backend_id)
 
     def save_current_chat_session(self, filepath: str) -> bool:
-        # ... (remains the same)
         if self._session_flow_manager:
             session_extra_data = {
                 "active_chat_backend_id": self._current_active_chat_backend_id,
@@ -1198,7 +1021,6 @@ class ChatManager(QObject):
         return self._session_flow_manager.list_saved_sessions() if self._session_flow_manager else []
 
     def process_user_message(self, text: str, image_data: List[Dict[str, Any]]):
-        # ... (remains the same)
         if self._user_input_handler: self._user_input_handler.handle_user_message(text=text, image_data=image_data,
                                                                                   focus_paths=self._current_chat_focus_paths,
                                                                                   rag_available=self._rag_available,
@@ -1206,7 +1028,6 @@ class ChatManager(QObject):
                                                                                       self.get_current_project_id()))
 
     def update_status_based_on_state(self):
-        # ... (remains the same)
         active_backend_display_name = next((detail["name"] for detail in USER_SELECTABLE_CHAT_BACKEND_DETAILS if
                                             detail['id'] == self._current_active_chat_backend_id),
                                            self._current_active_chat_backend_id)
@@ -1228,7 +1049,6 @@ class ChatManager(QObject):
             self.status_update.emit(" ".join(parts), "#98c379", False, 0)
 
     def set_chat_temperature(self, temperature: float):
-        # ... (remains the same)
         if 0.0 <= temperature <= 2.0:
             self._current_chat_temperature = temperature
             active_backend_display_name = next((detail["name"] for detail in USER_SELECTABLE_CHAT_BACKEND_DETAILS if
@@ -1240,65 +1060,65 @@ class ChatManager(QObject):
             self._trigger_save_last_session_state()
 
     def handle_file_upload(self, file_paths: List[str]):
-        # ... (remains the same)
         if self._upload_coordinator: self._upload_coordinator.upload_files_to_current_project(file_paths)
 
     def handle_directory_upload(self, dir_path: str):
-        # ... (remains the same)
         if self._upload_coordinator: self._upload_coordinator.upload_directory_to_current_project(dir_path)
 
     def handle_global_file_upload(self, file_paths: List[str]):
-        # ... (remains the same)
         if self._upload_coordinator: self._upload_coordinator.upload_files_to_global(file_paths)
 
     def handle_global_directory_upload(self, dir_path: str):
-        # ... (remains the same)
         if self._upload_coordinator: self._upload_coordinator.upload_directory_to_global(dir_path)
 
     def set_chat_focus(self, paths: List[str]):
-        # ... (remains the same)
         self._current_chat_focus_paths = paths
-        display_paths = [os.path.basename(p) for p in paths]
-        display = ", ".join(display_paths[:3]) + (
-            f", ... ({len(display_paths) - 3} more)" if len(display_paths) > 3 else "")
-        self.status_update.emit(f"Focus set on: {display}", "#61afef", True, 4000)
+        if paths:
+            display_paths = [os.path.basename(p) for p in paths]
+            display = ", ".join(display_paths[:3]) + (
+                f", ... ({len(display_paths) - 3} more)" if len(display_paths) > 3 else "")
+            self.status_update.emit(f"Focus set on: {display}", "#61afef", True, 4000)
+        else:
+            self.status_update.emit(f"Chat focus cleared.", "#61afef", True, 3000)
 
     def _update_overall_busy_state(self):
-        # ... (remains the same)
-        new_busy = (self._backend_coordinator.is_processing_request() if self._backend_coordinator else False) or \
-                   (self._upload_coordinator.is_busy() if self._upload_coordinator else False)
-        if self._overall_busy != new_busy: self._overall_busy = new_busy; self.busy_state_changed.emit(
-            self._overall_busy); self.update_status_based_on_state()
+        # CIH doesn't have an is_busy, we rely on BC.
+        # MSM has is_active which now contributes to overall busy.
+        backend_busy = self._backend_coordinator.is_processing_request() if self._backend_coordinator else False
+        upload_busy = self._upload_coordinator.is_busy() if self._upload_coordinator else False
+        msm_busy = self._modification_sequence_manager.is_active() if self._modification_sequence_manager else False
+
+        new_busy = backend_busy or upload_busy or msm_busy
+
+        if self._overall_busy != new_busy:
+            self._overall_busy = new_busy
+            self.busy_state_changed.emit(self._overall_busy)
+            self.update_status_based_on_state()
+
 
     def is_api_ready(self) -> bool:
-        # ... (remains the same)
         return self._chat_backend_configured_successfully.get(self._current_active_chat_backend_id, False)
 
     def resync_project_files_in_rag(self, file_paths: List[str]):
-        # ... (remains the same)
         if not self._upload_coordinator:
             logger.error("Cannot resync RAG files: UploadCoordinator not available.")
             self.error_occurred.emit("RAG update service not available.", False)
             return
-
         if not self._project_context_manager:
             logger.error("Cannot resync RAG files: ProjectContextManager not available.")
             self.error_occurred.emit("Project context service not available for RAG update.", False)
             return
-
         current_project_id = self._project_context_manager.get_active_project_id()
         if not current_project_id or current_project_id == constants.GLOBAL_COLLECTION_ID:
             logger.info(
                 f"RAG resync requested, but current project is Global or undefined ('{current_project_id}'). No specific project RAG to update.")
             return
-
         if not file_paths:
             logger.info("RAG resync requested, but no file paths were provided.")
             return
-
         logger.info(
             f"ChatManager: Requesting RAG resync for {len(file_paths)} files in project '{current_project_id}'.")
-        self._upload_coordinator.upload_files_to_current_project(file_paths)  # This should update existing if re-added
+        self._upload_coordinator.upload_files_to_current_project(file_paths)
         self.status_update.emit(
             f"Updating RAG for project '{self._project_context_manager.get_project_name(current_project_id)}' with {len(file_paths)} file(s)...",
             "#61afef", True, 4000)
